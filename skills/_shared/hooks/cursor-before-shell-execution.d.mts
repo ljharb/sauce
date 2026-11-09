@@ -9,9 +9,14 @@ export type CursorShellHookResponse =
   | { permission: 'allow' }
   | { permission: 'deny'; user_message: string; agent_message: string }
 
+export interface CursorHookOptions {
+  strict?: boolean | undefined
+}
+
 export declare function buildCursorHookResponse(
   input: unknown,
   env: InstallGateEnv | undefined,
+  options?: CursorHookOptions,
 ): CursorShellHookResponse
 export declare function buildCursorHookFailure(
   error: unknown,
@@ -22,6 +27,7 @@ export declare function readStdin(
 export declare function runCursorHook(
   stream: NodeJS.ReadableStream,
   env: InstallGateEnv | undefined,
+  options?: CursorHookOptions,
 ): Promise<CursorShellHookResponse>
 export declare function isEntryScript(
   moduleUrl: string,

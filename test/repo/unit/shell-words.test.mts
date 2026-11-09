@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  extractSubstitutions,
+  findClosingParen,
   splitShellSegments,
   tokenizeShellCommand,
 } from '../../../skills/_shared/hooks/shell-words.mjs'
@@ -46,6 +48,19 @@ describe('tokenizeShellCommand', () => {
       windows: true,
     }).tokens
     expect(first?.value).toBe('C:\\tools\\npm.cmd')
+  })
+})
+
+describe('findClosingParen', () => {
+  it('skips heredoc bodies inside a substitution', () => {
+    const text = "$(cat <<'EOF'\n1) step\nEOF\n) tail"
+    expect(text.slice(findClosingParen(text, 2))).toBe(') tail')
+  })
+})
+
+describe('extractSubstitutions', () => {
+  it('finds $() and backticks outside escapes', () => {
+    expect(extractSubstitutions('a $(b) `c` \\$(d)')).toEqual(['b', 'c'])
   })
 })
 

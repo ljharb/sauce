@@ -1,3 +1,5 @@
+import type { ShellToken } from './shell-words.mjs'
+
 export declare const SOCKET_SIGN_UP_URL: string
 export declare const SFW_DOCS_URL: string
 export declare const SFW_INSTALL_COMMAND: string
@@ -31,6 +33,7 @@ export interface EvaluateInstallCommandOptions {
   cwd?: string | undefined
   env?: InstallGateEnv | undefined
   platform?: string | undefined
+  strict?: boolean | undefined
 }
 
 export type InstallGateResult =
@@ -47,6 +50,10 @@ export declare function findUnprotectedInstalls(
   command: unknown,
   options?: FindUnprotectedInstallsOptions,
 ): UnprotectedInstall[]
+export declare function nextWorkingDirectory(
+  cwd: string | undefined,
+  words: ShellToken[],
+): string | undefined
 export declare function isSfwOnPath(env: InstallGateEnv | undefined): boolean
 export declare function evaluateInstallCommand(
   command: unknown,

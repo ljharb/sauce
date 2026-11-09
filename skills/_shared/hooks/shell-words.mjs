@@ -87,6 +87,54 @@ function stepParen(char, depth, caseDepth) {
   return depth
 }
 
+function readDelimiterWord(command, from) {
+  let i = from
+  while (command[i] === ' ' || command[i] === '\t') {
+    i += 1
+  }
+  const quote = command[i] === "'" || command[i] === '"' ? command[i] : ''
+  if (quote) {
+    const close = command.indexOf(quote, i + 1)
+    return close === -1 ? '' : command.slice(i + 1, close)
+  }
+  const match = /^[^\s;&|()<>]+/.exec(command.slice(i))
+  return match ? match[0].replaceAll('\\', '') : ''
+}
+
+export function skipHeredocText(command, index) {
+  const stripTabs = command[index + 2] === '-'
+  const delimiter = readDelimiterWord(command, index + (stripTabs ? 3 : 2))
+  const lineEnd = command.indexOf('\n', index)
+  if (!delimiter || lineEnd === -1) {
+    return index + 2
+  }
+  let cursor = lineEnd + 1
+  while (cursor < command.length) {
+    const newline = command.indexOf('\n', cursor)
+    const end = newline === -1 ? command.length : newline
+    const line = command.slice(cursor, end)
+    cursor = end + 1
+    if ((stripTabs ? line.replace(/^\t+/, '') : line) === delimiter) {
+      return end
+    }
+  }
+  return command.length
+}
+
+function skipSpecial(command, i) {
+  const char = command[i]
+  if (char === "'" || char === '"') {
+    return skipQuoted(command, i, char)
+  }
+  if (char === '\\') {
+    return i + 2
+  }
+  if (command.startsWith('<<', i) && command[i + 2] !== '<') {
+    return skipHeredocText(command, i)
+  }
+  return -1
+}
+
 export function findClosingParen(command, index) {
   let depth = 1
   let caseDepth = 0
@@ -94,12 +142,9 @@ export function findClosingParen(command, index) {
   const { length } = command
   while (i < length) {
     const char = command[i]
-    if (char === "'" || char === '"') {
-      i = skipQuoted(command, i, char)
-      continue
-    }
-    if (char === '\\') {
-      i += 2
+    const skipped = skipSpecial(command, i)
+    if (skipped !== -1) {
+      i = skipped
       continue
     }
     if (isWordAt(command, i, 'case')) {
@@ -199,9 +244,34 @@ function stepEscape(state, index) {
   return index + 2
 }
 
-function readHeredocBody(command, cursor, heredoc) {
+export function extractSubstitutions(text) {
+  const found = []
+  let i = 0
+  while (i < text.length) {
+    if (text[i] === '\\') {
+      i += 2
+    } else if (text.startsWith('$(', i)) {
+      const close = findClosingParen(text, i + 2)
+      const end = close === -1 ? text.length : close
+      found.push(text.slice(i + 2, end))
+      i = end + 1
+    } else if (text[i] === '`') {
+      const close = text.indexOf('`', i + 1)
+      const end = close === -1 ? text.length : close
+      found.push(text.slice(i + 1, end))
+      i = end + 1
+    } else {
+      i += 1
+    }
+  }
+  return found
+}
+
+function readHeredocBody(state, cursor, heredoc) {
+  const { command } = state
   const lines = []
   let next = cursor
+  let terminated = false
   while (next < command.length) {
     const newline = command.indexOf('\n', next)
     const lineEnd = newline === -1 ? command.length : newline
@@ -209,11 +279,17 @@ function readHeredocBody(command, cursor, heredoc) {
     next = lineEnd + 1
     const compare = heredoc.stripTabs ? line.replace(/^\t+/, '') : line
     if (compare === heredoc.delimiter) {
+      terminated = true
       break
     }
     lines.push(line)
   }
   heredoc.body = lines.join('\n')
+  if (!terminated) {
+    state.substitutions.push(heredoc.body)
+  } else if (!heredoc.quoted) {
+    state.substitutions.push(...extractSubstitutions(heredoc.body))
+  }
   return next
 }
 
@@ -224,7 +300,7 @@ function stepNewline(state, index) {
   let cursor = index + 1
   for (let i = 0, { length } = state.heredocs; i < length; i += 1) {
     if (state.heredocs[i].body === undefined) {
-      cursor = readHeredocBody(state.command, cursor, state.heredocs[i])
+      cursor = readHeredocBody(state, cursor, state.heredocs[i])
     }
   }
   return cursor
@@ -246,6 +322,11 @@ function stepUnquoted(state, index) {
   if (char === '$' && command[index + 1] === "'") {
     return readAnsiCString(state, index)
   }
+  if (char === '$' && command[index + 1] === '"') {
+    startWord(state, index)
+    state.quote = '"'
+    return index + 2
+  }
   if (char === "'" || char === '"') {
     startWord(state, index)
     state.quote = char
@@ -260,7 +341,13 @@ function stepUnquoted(state, index) {
 function isBraceOperator(state, index) {
   const { command } = state
   const char = command[index]
-  if (state.start !== -1 || (char !== '{' && char !== '}')) {
+  if (char !== '{' && char !== '}') {
+    return false
+  }
+  if (state.windows) {
+    return true
+  }
+  if (state.start !== -1) {
     return false
   }
   const next = command[index + 1]
@@ -291,6 +378,7 @@ function stepStructure(state, index) {
     return index + operator.length
   }
   if (isBraceOperator(state, index)) {
+    flushWord(state, index)
     state.tokens.push({ type: 'operator', value: command[index], start: index })
     return index + 1
   }
@@ -337,6 +425,7 @@ function attachHeredocDelimiters(state) {
     ) {
       token.heredoc = {
         delimiter: target.value,
+        quoted: /['"\\]/.test(state.command.slice(target.start, target.end)),
         stripTabs: token.value.endsWith('-'),
         body: undefined,
       }

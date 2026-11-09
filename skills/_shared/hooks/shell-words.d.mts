@@ -23,6 +23,8 @@ export interface TokenizedShellCommand {
 }
 
 export declare function findClosingParen(command: string, index: number): number
+export declare function skipHeredocText(command: string, index: number): number
+export declare function extractSubstitutions(text: string): string[]
 export declare function tokenizeShellCommand(
   command: string,
   options?: TokenizeShellCommandOptions,

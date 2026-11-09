@@ -136,6 +136,22 @@ describe('findUnprotectedInstalls: shell structure', () => {
     ['time -p npm i', 'time -p sfw npm i'],
     ['env SFW_HOME=/opt/sfw npm i', 'env SFW_HOME=/opt/sfw sfw npm i'],
     ['sudo -u sfw npm install x', 'sudo -u sfw sfw npm install x'],
+    [
+      'mise exec node@20 -- npm install',
+      'mise exec node@20 -- sfw npm install',
+    ],
+    ['volta run --node 20 npm install', 'volta run --node 20 sfw npm install'],
+    ['conda run -n env pip install x', 'conda run -n env sfw pip install x'],
+    ['poetry run pip install x', 'poetry run sfw pip install x'],
+    ['direnv exec . npm install', 'direnv exec . sfw npm install'],
+    ['runuser -u bob -- npm install', 'runuser -u bob -- sfw npm install'],
+    ['script -q /dev/null npm install', 'script -q /dev/null sfw npm install'],
+    ['flock /tmp/l npm i', 'flock /tmp/l sfw npm i'],
+    ['lerna exec -- npm install x', 'lerna exec -- sfw npm install x'],
+    ['parallel npm install ::: a b', 'parallel sfw npm install ::: a b'],
+    ['coproc npm install', 'sfw npm install'],
+    ['time ! npm i', 'time ! sfw npm i'],
+    ['a[0]=b npm i', 'a[0]=b sfw npm i'],
   ])('keeps wrappers ahead of sfw: %s', (command, suggestion) => {
     expect(suggestions(command)).toEqual([suggestion])
   })
@@ -167,6 +183,13 @@ describe('findUnprotectedInstalls: shell structure', () => {
     ['find . -name package.json -execdir npm install \\;', 'sfw npm install'],
     ['iex "npm install x"', 'sfw npm install x'],
     ['echo $(case x in a) npm install x;; esac)', 'sfw npm install x'],
+    ['bash -c -- "npm i"', 'sfw npm i'],
+    ['bash -c -o pipefail "npm i"', 'sfw npm i'],
+    ["trap 'npm install' EXIT", 'sfw npm install'],
+    ['git -C sub submodule foreach npm install', 'sfw npm install'],
+    ['cat <<EOF\n$(npm i)\nEOF', 'sfw npm i'],
+    ['cat <<EOF\n`npm i`\nEOF', 'sfw npm i'],
+    ['(( x = 1 << 2 ))\nnpm install', 'sfw npm install'],
   ])('looks inside nested scripts: %j', (command, suggestion) => {
     expect(suggestions(command)).toEqual([suggestion])
   })
@@ -198,6 +221,14 @@ describe('findUnprotectedInstalls: shell structure', () => {
       'powershell -EncodedCommand ZQBjAGgAbwA=',
     )
     expect(encoded?.ecosystem).toBe('unknown')
+  })
+
+  it.each([
+    'if (Test-Path x) {npm i}',
+    'Get-ChildItem | ForEach-Object {npm i}',
+    'Invoke-Command -ScriptBlock {npm install}',
+  ])('reads PowerShell script blocks on win32: %s', command => {
+    expect(suggestions(command, 'win32')).toHaveLength(1)
   })
 
   it('keeps Windows paths intact on win32', () => {
@@ -260,6 +291,15 @@ describe('findUnprotectedInstalls: allowed commands', () => {
     'yarn add --help',
     'uv add --help',
     'git status',
+    'git commit -m "$(cat <<\'EOF\'\nchore: bump\n\n1) ran `npm install`\nEOF\n)"',
+    "cat <<'EOF'\n$(npm i)\nEOF",
+    'npm init -y --init-license MIT',
+    'npm init --scope @me -y',
+    'npm i -g sfw --registry https://registry.npmjs.org',
+    'yarn workspaces foreach -A exec echo install',
+    'yarn workspaces foreach -A run build',
+    'npx --help',
+    'uvx --version',
     'ls -la',
     '',
     '   ',
@@ -284,6 +324,24 @@ describe('findUnprotectedInstalls: allowed commands', () => {
 })
 
 describe('npx with a local binary', () => {
+  it('follows cd and checks local wrapper binaries', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'install-gate-npx-'))
+    for (const name of ['cross-env', 'turbo']) {
+      mkdirSync(path.join(root, 'node_modules', '.bin'), { recursive: true })
+      writeFileSync(path.join(root, 'node_modules', '.bin', name), '')
+    }
+    const app = path.join(root, 'packages', 'app', 'node_modules', '.bin')
+    mkdirSync(app, { recursive: true })
+    writeFileSync(path.join(app, 'vite'), '')
+    const check = (command: string) =>
+      findUnprotectedInstalls(command, { cwd: root, platform: 'darwin' })
+    expect(check('cd packages/app && npx vite build')).toEqual([])
+    expect(check('npx -y turbo run build')).toEqual([])
+    expect(check('npx -w packages/app turbo run build')).toEqual([])
+    expect(check('cd /tmp && npx turbo run build')).toHaveLength(1)
+    expect(check('npx cross-env CI=1 npm install')).toHaveLength(1)
+  })
+
   it('allows a binary installed in node_modules/.bin and denies a fetch', () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'install-gate-npx-'))
     const binDir = path.join(root, 'node_modules', '.bin')
@@ -296,7 +354,6 @@ describe('npx with a local binary', () => {
     expect(check('npx tsc --noEmit')).toEqual([])
     expect(check('npm exec tsc')).toEqual([])
     expect(check('npx tsc@5 --noEmit')).toHaveLength(1)
-    expect(check('npx -y tsc')).toHaveLength(1)
     expect(check('npx eslint .')).toHaveLength(1)
   })
 })
@@ -355,6 +412,14 @@ describe('evaluateInstallCommand', () => {
     )
     expect(result.sfwInstalled).toBe(true)
     expect(result.agentMessage).not.toContain(SFW_INSTALL_COMMAND)
+  })
+
+  it('ignores the off switch in strict mode', () => {
+    const result = evaluateInstallCommand('npm install lodash', {
+      env: { SOCKET_INSTALL_GATE: 'off' },
+      strict: true,
+    })
+    expect(result.decision).toBe('deny')
   })
 
   it('can be turned off for one environment', () => {

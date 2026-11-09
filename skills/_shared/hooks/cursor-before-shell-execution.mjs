@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url'
 
 import { evaluateInstallCommand } from './install-gate.mjs'
 
-export function buildCursorHookResponse(input, env) {
+export function buildCursorHookResponse(input, env, options) {
+  const { strict = false } = { __proto__: null, ...options }
   if (
     !input ||
     typeof input !== 'object' ||
@@ -23,6 +24,7 @@ export function buildCursorHookResponse(input, env) {
   const result = evaluateInstallCommand(input.command, {
     cwd: typeof input.cwd === 'string' ? input.cwd : undefined,
     env,
+    strict,
   })
   if (result.decision === 'allow') {
     return { permission: 'allow' }
@@ -56,10 +58,10 @@ export async function readStdin(stream) {
   return text
 }
 
-export async function runCursorHook(stream, env) {
+export async function runCursorHook(stream, env, options) {
   const text = await readStdin(stream)
   const input = JSON.parse(text)
-  return buildCursorHookResponse(input, env)
+  return buildCursorHookResponse(input, env, options)
 }
 
 export function isEntryScript(moduleUrl, argvPath) {
@@ -74,7 +76,9 @@ export function isEntryScript(moduleUrl, argvPath) {
 }
 
 if (isEntryScript(import.meta.url, process.argv[1])) {
-  runCursorHook(process.stdin, process.env).then(
+  runCursorHook(process.stdin, process.env, {
+    strict: process.argv.includes('--strict'),
+  }).then(
     response => {
       process.stdout.write(`${JSON.stringify(response)}\n`)
     },

@@ -5,9 +5,9 @@ alwaysApply: false
 
 # Socket install protection
 
-This plugin adds a `beforeShellExecution` hook. Before Cursor runs a shell command, the hook looks for package installs (npm, npx, pnpm, yarn, pip, uv, uvx, and cargo). An install that does not run through Socket Firewall (`sfw`) is blocked. `sfw` checks every package against Socket before it downloads, and stops known malware. It needs no Socket account and no API key.
+This plugin adds a `beforeShellExecution` hook. Before Cursor runs a shell command, the hook looks for package installs (npm, npx, pnpm, yarn, pip, uv, uvx, and cargo). An install that does not run through Socket Firewall (`sfw`) is blocked. `sfw` checks packages that are downloaded from public registries against Socket, and blocks confirmed malware. It needs no Socket account and no API key. Packages that come from a local cache are not checked.
 
-`npx` and `npm exec` are allowed when the binary is already in `node_modules/.bin`, or with `--no-install`. `uv run` is checked only with `--with`. Installs inside containers (`docker run`, `docker build`) are not checked.
+`npx` and `npm exec` are allowed when the binary is already in `node_modules/.bin`, or with `--no-install`. These are not checked: `uv run` without `--with`, `cargo build` and `cargo test` (which can download crates), and installs inside containers (`docker run`, `docker build`).
 
 The hook runs with `node`. If `node` is not on the PATH that Cursor starts with, the hook cannot run and Cursor runs the command without the check.
 
@@ -18,7 +18,8 @@ The block message starts with "Protected by Socket" and shows the same command w
 1. If the message says sfw is not installed, run `npm install -g sfw` first. The hook allows that command.
 2. Run the command from the message, for example `sfw npm install lodash`. Keep every flag and argument.
 3. If the message says the command cannot be checked (for example, it is nested too deeply or encoded), write it again as a plain command with `sfw` in front of the package manager.
-4. Do not try to get around the check: do not change the command's spelling, put it in a script, or set environment variables to skip the check. If the user wants to turn the check off, tell them to set `SOCKET_INSTALL_GATE=off` in the environment Cursor starts with.
+4. `sfw` does not support private or custom registries. If the project installs from one (for example, an `.npmrc` or `pip.conf` that points at a company registry), stop and ask the user what to do. Do not run the install another way.
+5. Do not try to get around the check: do not change the command's spelling, put it in a script, or set environment variables to skip the check. If the user wants to turn the check off, tell them to set `SOCKET_INSTALL_GATE=off` in the environment Cursor starts with. A hook that runs with `--strict` ignores that setting.
 
 If `sfw` itself reports a blocked package, stop and tell the user the package name and version. Do not install it another way. Offer `/socket-inspect` for a full review, or suggest a different package.
 
@@ -68,7 +69,9 @@ Cursor loads enterprise hooks from a fixed path on each computer. A device manag
 | Linux / WSL | `/etc/cursor/hooks.json`                         |
 | Windows     | `C:\ProgramData\Cursor\hooks.json`               |
 
-Put `socket-install-gate.mjs` in the same folder, and use the hooks.json from the project section with that path in `command`. For example, on macOS: `node "/Library/Application Support/Cursor/socket-install-gate.mjs"`. Install Node.js on every computer before you set `failClosed: true`.
+Put `socket-install-gate.mjs` in the same folder, and use the hooks.json from the project section with that path in `command`. Add `--strict` so that `SOCKET_INSTALL_GATE=off`, which a `sessionStart` hook can also set, does not turn the check off. For example, on macOS: `node "/Library/Application Support/Cursor/socket-install-gate.mjs" --strict`. Install Node.js on every computer before you set `failClosed: true`.
+
+By default, Cursor waits only a short time for hooks to load, so the first prompt after a restart can run before the hook is ready. On Enterprise plans, turn on **Block until hooks are ready** in the dashboard's hook settings.
 
 Hooks added in the Cursor team dashboard cannot set `failClosed`, so a crash in the hook lets the command run. Use MDM or a project hook when the check must not fail open.
 

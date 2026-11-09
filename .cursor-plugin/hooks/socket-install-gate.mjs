@@ -100,6 +100,54 @@ function stepParen(char, depth, caseDepth) {
   return depth
 }
 
+function readDelimiterWord(command, from) {
+  let i = from
+  while (command[i] === ' ' || command[i] === '\t') {
+    i += 1
+  }
+  const quote = command[i] === "'" || command[i] === '"' ? command[i] : ''
+  if (quote) {
+    const close = command.indexOf(quote, i + 1)
+    return close === -1 ? '' : command.slice(i + 1, close)
+  }
+  const match = /^[^\s;&|()<>]+/.exec(command.slice(i))
+  return match ? match[0].replaceAll('\\', '') : ''
+}
+
+export function skipHeredocText(command, index) {
+  const stripTabs = command[index + 2] === '-'
+  const delimiter = readDelimiterWord(command, index + (stripTabs ? 3 : 2))
+  const lineEnd = command.indexOf('\n', index)
+  if (!delimiter || lineEnd === -1) {
+    return index + 2
+  }
+  let cursor = lineEnd + 1
+  while (cursor < command.length) {
+    const newline = command.indexOf('\n', cursor)
+    const end = newline === -1 ? command.length : newline
+    const line = command.slice(cursor, end)
+    cursor = end + 1
+    if ((stripTabs ? line.replace(/^\t+/, '') : line) === delimiter) {
+      return end
+    }
+  }
+  return command.length
+}
+
+function skipSpecial(command, i) {
+  const char = command[i]
+  if (char === "'" || char === '"') {
+    return skipQuoted(command, i, char)
+  }
+  if (char === '\\') {
+    return i + 2
+  }
+  if (command.startsWith('<<', i) && command[i + 2] !== '<') {
+    return skipHeredocText(command, i)
+  }
+  return -1
+}
+
 export function findClosingParen(command, index) {
   let depth = 1
   let caseDepth = 0
@@ -107,12 +155,9 @@ export function findClosingParen(command, index) {
   const { length } = command
   while (i < length) {
     const char = command[i]
-    if (char === "'" || char === '"') {
-      i = skipQuoted(command, i, char)
-      continue
-    }
-    if (char === '\\') {
-      i += 2
+    const skipped = skipSpecial(command, i)
+    if (skipped !== -1) {
+      i = skipped
       continue
     }
     if (isWordAt(command, i, 'case')) {
@@ -212,9 +257,34 @@ function stepEscape(state, index) {
   return index + 2
 }
 
-function readHeredocBody(command, cursor, heredoc) {
+export function extractSubstitutions(text) {
+  const found = []
+  let i = 0
+  while (i < text.length) {
+    if (text[i] === '\\') {
+      i += 2
+    } else if (text.startsWith('$(', i)) {
+      const close = findClosingParen(text, i + 2)
+      const end = close === -1 ? text.length : close
+      found.push(text.slice(i + 2, end))
+      i = end + 1
+    } else if (text[i] === '`') {
+      const close = text.indexOf('`', i + 1)
+      const end = close === -1 ? text.length : close
+      found.push(text.slice(i + 1, end))
+      i = end + 1
+    } else {
+      i += 1
+    }
+  }
+  return found
+}
+
+function readHeredocBody(state, cursor, heredoc) {
+  const { command } = state
   const lines = []
   let next = cursor
+  let terminated = false
   while (next < command.length) {
     const newline = command.indexOf('\n', next)
     const lineEnd = newline === -1 ? command.length : newline
@@ -222,11 +292,17 @@ function readHeredocBody(command, cursor, heredoc) {
     next = lineEnd + 1
     const compare = heredoc.stripTabs ? line.replace(/^\t+/, '') : line
     if (compare === heredoc.delimiter) {
+      terminated = true
       break
     }
     lines.push(line)
   }
   heredoc.body = lines.join('\n')
+  if (!terminated) {
+    state.substitutions.push(heredoc.body)
+  } else if (!heredoc.quoted) {
+    state.substitutions.push(...extractSubstitutions(heredoc.body))
+  }
   return next
 }
 
@@ -237,7 +313,7 @@ function stepNewline(state, index) {
   let cursor = index + 1
   for (let i = 0, { length } = state.heredocs; i < length; i += 1) {
     if (state.heredocs[i].body === undefined) {
-      cursor = readHeredocBody(state.command, cursor, state.heredocs[i])
+      cursor = readHeredocBody(state, cursor, state.heredocs[i])
     }
   }
   return cursor
@@ -259,6 +335,11 @@ function stepUnquoted(state, index) {
   if (char === '$' && command[index + 1] === "'") {
     return readAnsiCString(state, index)
   }
+  if (char === '$' && command[index + 1] === '"') {
+    startWord(state, index)
+    state.quote = '"'
+    return index + 2
+  }
   if (char === "'" || char === '"') {
     startWord(state, index)
     state.quote = char
@@ -273,7 +354,13 @@ function stepUnquoted(state, index) {
 function isBraceOperator(state, index) {
   const { command } = state
   const char = command[index]
-  if (state.start !== -1 || (char !== '{' && char !== '}')) {
+  if (char !== '{' && char !== '}') {
+    return false
+  }
+  if (state.windows) {
+    return true
+  }
+  if (state.start !== -1) {
     return false
   }
   const next = command[index + 1]
@@ -304,6 +391,7 @@ function stepStructure(state, index) {
     return index + operator.length
   }
   if (isBraceOperator(state, index)) {
+    flushWord(state, index)
     state.tokens.push({ type: 'operator', value: command[index], start: index })
     return index + 1
   }
@@ -350,6 +438,7 @@ function attachHeredocDelimiters(state) {
     ) {
       token.heredoc = {
         delimiter: target.value,
+        quoted: /['"\\]/.test(state.command.slice(target.start, target.end)),
         stripTabs: token.value.endsWith('-'),
         body: undefined,
       }
@@ -437,10 +526,11 @@ export function splitShellSegments(tokens) {
  *   extracts scripts passed to shells and other command runners.
  */
 
-export const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
+export const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
 
 const KEYWORDS = new Set([
   '!',
+  'coproc',
   'do',
   'elif',
   'else',
@@ -454,9 +544,47 @@ function flags(...names) {
   return new Set(names)
 }
 
+const PYTHON_ENV_RUN = { subcommands: flags('run') }
+
+const DASH_C_STOP = flags('-c', '--command')
+
 const WRAPPERS = {
   __proto__: null,
+  arch: {},
   builtin: {},
+  caffeinate: { valueFlags: flags('-t', '-w') },
+  conda: {
+    subcommands: flags('run'),
+    valueFlags: flags('-n', '-p', '--cwd', '--name', '--prefix'),
+  },
+  direnv: { positionals: 1, subcommands: flags('exec') },
+  flock: { positionals: 1, stopFlags: DASH_C_STOP, valueFlags: flags('-w') },
+  hatch: PYTHON_ENV_RUN,
+  lerna: {
+    subcommands: flags('exec'),
+    valueFlags: flags('--concurrency', '--ignore', '--scope'),
+  },
+  mamba: {
+    subcommands: flags('run'),
+    valueFlags: flags('-n', '-p', '--name', '--prefix'),
+  },
+  micromamba: {
+    subcommands: flags('run'),
+    valueFlags: flags('-n', '-p', '--name', '--prefix'),
+  },
+  parallel: { valueFlags: flags('-j', '-P', '--jobs') },
+  pdm: PYTHON_ENV_RUN,
+  pipenv: PYTHON_ENV_RUN,
+  poetry: PYTHON_ENV_RUN,
+  rye: PYTHON_ENV_RUN,
+  runuser: {
+    stopFlags: DASH_C_STOP,
+    valueFlags: flags('-g', '-u', '--group', '--user'),
+  },
+  script: { positionals: 1, stopFlags: DASH_C_STOP, valueFlags: flags('-t') },
+  setsid: {},
+  taskset: { positionals: 1 },
+  unbuffer: {},
   chrt: { positionals: 1 },
   command: { lookupFlags: flags('-v', '-V') },
   corepack: {},
@@ -470,7 +598,7 @@ const WRAPPERS = {
   },
   exec: { valueFlags: flags('-a') },
   ionice: { valueFlags: flags('-c', '-n', '-p', '--class', '--classdata') },
-  mise: { subcommands: flags('exec', 'x') },
+  mise: { skipToDoubleDash: true, subcommands: flags('exec', 'x') },
   nice: { valueFlags: flags('-n', '--adjustment') },
   nohup: {},
   stdbuf: { valueFlags: flags('-i', '-o', '-e') },
@@ -501,7 +629,10 @@ const WRAPPERS = {
     positionals: 1,
     valueFlags: flags('-k', '-s', '--kill-after', '--signal'),
   },
-  volta: { subcommands: flags('run') },
+  volta: {
+    subcommands: flags('run'),
+    valueFlags: flags('--env', '--node', '--npm', '--pnpm', '--yarn'),
+  },
   xargs: {
     valueFlags: flags(
       '-a',
@@ -547,7 +678,10 @@ const DASH_C_RUNNERS = {
 
 export function commandBaseName(word) {
   const base = path.posix.basename(word.replaceAll('\\', '/'))
-  return base.replace(/\.(?:bat|cmd|exe|ps1)$/i, '').toLowerCase()
+  return base
+    .replace(/\.(?:bat|cmd|exe|ps1)$/i, '')
+    .replace(/(?<=.)@[\w.^~<>=*-]*$/, '')
+    .toLowerCase()
 }
 
 export function skipKeywords(words) {
@@ -574,8 +708,11 @@ function wrapperOptionStep(spec, value) {
   if (spec.lookupFlags?.has(value)) {
     return 'lookup'
   }
-  if (spec.stopFlags?.has(value) || /^(?:-S|--split-string=)./.test(value)) {
-    return spec.stopFlags ? 'stop' : 1
+  if (
+    spec.stopFlags?.has(value) ||
+    (spec.stopFlags?.has('-S') && /^(?:-S|--split-string=)./.test(value))
+  ) {
+    return 'stop'
   }
   return spec.valueFlags?.has(value) ? 2 : 1
 }
@@ -614,7 +751,16 @@ function wrapperArgsStart(spec, words, index) {
     return index + 1
   }
   const sub = words[index + 1]?.value
-  return sub && spec.subcommands.has(sub) ? index + 2 : -1
+  if (!sub || !spec.subcommands.has(sub)) {
+    return -1
+  }
+  if (spec.skipToDoubleDash) {
+    const dashes = words.findIndex(
+      (word, i) => i > index && word.value === '--',
+    )
+    return dashes === -1 ? index + 2 : dashes
+  }
+  return index + 2
 }
 
 export function resolveCommandWord(words) {
@@ -637,6 +783,7 @@ export function resolveCommandWord(words) {
       return { index: i }
     }
     i = skipped.next
+    i += skipKeywords(words.slice(i))
   }
   return { index: -1 }
 }
@@ -660,10 +807,27 @@ function isDashC(value) {
   return /^[a-z]+$/i.test(letters) && letters.includes('c')
 }
 
+const SHELL_OPTION_VALUE_FLAGS = flags('-o', '+o', '-O', '+O')
+
+function shellOperand(words, from) {
+  let i = from
+  while (i < words.length) {
+    const value = words[i].value
+    if (value === '--') {
+      return words[i + 1]?.value
+    }
+    if (!/^[-+]./.test(value)) {
+      return value
+    }
+    i += SHELL_OPTION_VALUE_FLAGS.has(value) ? 2 : 1
+  }
+  return undefined
+}
+
 function posixShellScript(words, index) {
-  for (let i = index + 1, { length } = words; i < length - 1; i += 1) {
+  for (let i = index + 1, { length } = words; i < length; i += 1) {
     if (isDashC(words[i].value)) {
-      return words[i + 1].value
+      return shellOperand(words, i + 1)
     }
   }
   return undefined
@@ -718,13 +882,22 @@ function positionalFrom(words, from, valueFlags) {
   return i
 }
 
+const GIT_VALUE_FLAGS = flags(
+  '-C',
+  '-c',
+  '--git-dir',
+  '--namespace',
+  '--work-tree',
+)
+
 function gitScript(words, index) {
-  const sub = words[index + 1]?.value
-  if (sub === 'submodule' && words[index + 2]?.value === 'foreach') {
-    return joinWords(words, positionalFrom(words, index + 3, new Set()))
+  const subIndex = positionalFrom(words, index + 1, GIT_VALUE_FLAGS)
+  const sub = words[subIndex]?.value
+  if (sub === 'submodule' && words[subIndex + 1]?.value === 'foreach') {
+    return joinWords(words, positionalFrom(words, subIndex + 2, new Set()))
   }
-  if (sub === 'bisect' && words[index + 2]?.value === 'run') {
-    return joinWords(words, index + 3)
+  if (sub === 'bisect' && words[subIndex + 1]?.value === 'run') {
+    return joinWords(words, subIndex + 2)
   }
   if (sub === 'rebase') {
     return optionValue(words, index, flags('-x', '--exec'))
@@ -779,6 +952,7 @@ const SCRIPT_RUNNERS = {
   gh: ghScript,
   git: gitScript,
   nix: nixScript,
+  trap: (words, index) => words[index + 1]?.value,
   watch: watchScript,
 }
 
@@ -849,6 +1023,12 @@ const GLOBAL_FLAGS = flagSet('--global', '-g')
 const SFW_PACKAGE_RE = /^sfw(?:@[\w.^~<>=*-]+)?$/
 
 const NPM_VALUE_FLAGS = flagSet(
+  '--cafile',
+  '--depth',
+  '--fetch-retries',
+  '--fetch-timeout',
+  '--https-proxy',
+  '--proxy',
   '-C',
   '-w',
   '--before',
@@ -873,6 +1053,7 @@ const NPM_VALUE_FLAGS = flagSet(
 )
 
 const PNPM_VALUE_FLAGS = flagSet(
+  '--lockfile-dir',
   '-C',
   '-F',
   '--changed-files-ignore-pattern',
@@ -892,6 +1073,8 @@ const PNPM_VALUE_FLAGS = flagSet(
 )
 
 const YARN_VALUE_FLAGS = flagSet(
+  '--https-proxy',
+  '--proxy',
   '--cache-folder',
   '--cwd',
   '--global-folder',
@@ -929,6 +1112,10 @@ const PIP_VALUE_FLAGS = flagSet(
 )
 
 const UV_VALUE_FLAGS = flagSet(
+  '--default-index',
+  '--extra-index-url',
+  '--index',
+  '--index-url',
   '-p',
   '--cache-dir',
   '--color',
@@ -952,7 +1139,7 @@ const NPX_OFFLINE_FLAGS = flagSet(
   '--yes=false',
 )
 
-const NPX_FETCH_FLAGS = flagSet('-p', '-y', '--package', '--yes')
+const NPX_PACKAGE_FLAGS = flagSet('-p', '--package')
 
 const NPM_VERBS = flagSet(
   'add',
@@ -1000,6 +1187,7 @@ const PNPM_VERBS = flagSet(
 
 const YARN_VERBS = flagSet(
   'add',
+  'dedupe',
   'install',
   'up',
   'upgrade',
@@ -1008,7 +1196,7 @@ const YARN_VERBS = flagSet(
 
 const PIP_VERBS = flagSet('download', 'install', 'wheel')
 
-const CARGO_VERBS = flagSet('add', 'fetch', 'install')
+const CARGO_VERBS = flagSet('add', 'binstall', 'fetch', 'install', 'vendor')
 
 const UV_TOOL_VERBS = flagSet('install', 'run', 'upgrade')
 
@@ -1016,35 +1204,119 @@ const UV_PIP_VERBS = flagSet('install', 'sync')
 
 const UV_WITH_RE = /^--with(?:-editable|-requirements)?(?:=|$)/
 
-const PIP_RE = /^pip(?:\d+(?:\.\d+)?)?$/
+const PIP_RE = /^pip(?:-?\d+(?:\.\d+)?)?$/
 
-const PYTHON_RE = /^(?:py|python(?:\d+(?:\.\d+)?)?)$/
+const PYTHON_RE = /^(?:py|pypy|python)(?:\d+(?:\.\d+)?t?)?$/
+
+const NPM_INIT_VALUE_FLAGS = new Set([
+  ...NPM_VALUE_FLAGS,
+  '--init-author-email',
+  '--init-author-name',
+  '--init-author-url',
+  '--init-license',
+  '--init-module',
+  '--init-type',
+  '--init-version',
+])
+
+const NPX_ALL_VALUE_FLAGS = new Set([...NPX_VALUE_FLAGS, ...NPM_VALUE_FLAGS])
+
+const NPM_SUBCOMMANDS = new Set([
+  ...NPM_VERBS,
+  'audit',
+  'create',
+  'exec',
+  'init',
+  'x',
+])
+
+const PNPM_RECURSIVE = flagSet('m', 'multi', 'recursive')
+
+const PNPM_SUBCOMMANDS = new Set([
+  ...PNPM_VERBS,
+  ...PNPM_RECURSIVE,
+  'create',
+  'dlx',
+  'exec',
+])
+
+const YARN_SUBCOMMANDS = new Set([
+  ...YARN_VERBS,
+  'create',
+  'dlx',
+  'exec',
+  'global',
+  'workspace',
+  'workspaces',
+])
+
+const YARN_FOREACH_VALUE_FLAGS = flagSet(
+  '-j',
+  '--exclude',
+  '--from',
+  '--include',
+  '--jobs',
+)
+
+const UV_RUN_VALUE_FLAGS = flagSet(
+  '-p',
+  '--default-index',
+  '--directory',
+  '--env-file',
+  '--extra',
+  '--group',
+  '--index',
+  '--index-url',
+  '--package',
+  '--project',
+  '--python',
+  '--with',
+  '--with-editable',
+  '--with-requirements',
+)
+
+const UVX_VALUE_FLAGS = flagSet('-p', '--from', '--index', '--python', '--with')
+
+function isFlagWord(value) {
+  return value.length > 1 && value.startsWith('-')
+}
 
 export function findSubcommand(words, from, valueFlags) {
+  let afterUnknownFlag = false
   for (let i = from, { length } = words; i < length; i += 1) {
     const value = words[i].value
-    if (value.startsWith('-') && value.length > 1) {
-      if (!value.includes('=') && valueFlags.has(value)) {
-        i += 1
-      }
+    if (isFlagWord(value)) {
+      const takesValue = !value.includes('=') && valueFlags.has(value)
+      afterUnknownFlag =
+        !takesValue && value.startsWith('--') && !value.includes('=')
+      i += takesValue ? 1 : 0
       continue
     }
     if (value.startsWith('+')) {
       continue
     }
-    return { index: i, value }
+    return { index: i, value, afterUnknownFlag }
   }
   return undefined
+}
+
+function findKnownSubcommand(words, from, valueFlags, known) {
+  const sub = findSubcommand(words, from, valueFlags)
+  if (sub && !known.has(sub.value) && sub.afterUnknownFlag) {
+    const next = findSubcommand(words, sub.index + 1, valueFlags)
+    if (next && known.has(next.value)) {
+      return next
+    }
+  }
+  return sub
 }
 
 export function positionalArgs(words, from, valueFlags) {
   const args = []
   for (let i = from, { length } = words; i < length; i += 1) {
     const value = words[i].value
-    if (value.startsWith('-') && value.length > 1) {
-      if (valueFlags?.has(value)) {
-        i += 1
-      }
+    if (isFlagWord(value)) {
+      i += !value.includes('=') && valueFlags?.has(value) ? 1 : 0
       continue
     }
     args.push(value)
@@ -1052,8 +1324,8 @@ export function positionalArgs(words, from, valueFlags) {
   return args
 }
 
-export function hasFlag(words, from, names) {
-  for (let i = from, { length } = words; i < length; i += 1) {
+export function hasFlag(words, from, names, until = words.length) {
+  for (let i = from; i < until; i += 1) {
     if (names.has(words[i].value)) {
       return true
     }
@@ -1061,8 +1333,8 @@ export function hasFlag(words, from, names) {
   return false
 }
 
-function hasFlagMatching(words, from, pattern) {
-  for (let i = from, { length } = words; i < length; i += 1) {
+function hasFlagMatching(words, from, pattern, until = words.length) {
+  for (let i = from; i < until; i += 1) {
     if (pattern.test(words[i].value)) {
       return true
     }
@@ -1070,12 +1342,29 @@ function hasFlagMatching(words, from, pattern) {
   return false
 }
 
-export function isSfwSelfInstall(words, from, sub) {
+export function runnerTarget(words, from, valueFlags) {
+  for (let i = from, { length } = words; i < length; i += 1) {
+    const value = words[i].value
+    if (value === '--') {
+      return i + 1 < length ? i + 1 : -1
+    }
+    if (isFlagWord(value)) {
+      i += !value.includes('=') && valueFlags.has(value) ? 1 : 0
+      continue
+    }
+    return i
+  }
+  return -1
+}
+
+export function isSfwSelfInstall(words, from, sub, valueFlags) {
   const isGlobal = sub.value === 'global' || hasFlag(words, from, GLOBAL_FLAGS)
   if (!isGlobal) {
     return false
   }
-  const args = positionalArgs(words, sub.index + 1).filter(arg => arg !== 'add')
+  const args = positionalArgs(words, sub.index + 1, valueFlags).filter(
+    arg => arg !== 'add',
+  )
   return args.length > 0 && args.every(arg => SFW_PACKAGE_RE.test(arg))
 }
 
@@ -1102,159 +1391,257 @@ function hasLocalBin(cwd, bin) {
   return false
 }
 
-export function npxFetches(words, from, cwd) {
+export function classifyCommandAt(words, index, ctx) {
+  if (index === -1) {
+    return undefined
+  }
+  const rest = words.slice(index)
+  const resolved = resolveCommandWord(rest).index
+  return resolved === -1 ? undefined : classifyInstall(rest, resolved, ctx)
+}
+
+function classifyLocalWrapper(words, index, ctx) {
+  const rest = words.slice(index)
+  const resolved = resolveCommandWord(rest).index
+  return resolved > 0 ? classifyInstall(rest, resolved, ctx) : undefined
+}
+
+export function npxFetches(words, from, ctx) {
+  const target = runnerTarget(words, from, NPX_ALL_VALUE_FLAGS)
+  const before = target === -1 ? words.length : target
   if (
-    hasFlag(words, from, INFO_FLAGS) ||
-    hasFlag(words, from, NPX_OFFLINE_FLAGS)
+    hasFlag(words, from, INFO_FLAGS, before) ||
+    hasFlag(words, from, NPX_OFFLINE_FLAGS, before)
   ) {
     return false
   }
   if (
-    hasFlag(words, from, NPX_FETCH_FLAGS) ||
-    hasFlagMatching(words, from, /^--package=/)
+    hasFlag(words, from, NPX_PACKAGE_FLAGS, before) ||
+    hasFlagMatching(words, from, /^--package=/, before)
   ) {
     return true
   }
-  const [bin] = positionalArgs(words, from, NPX_VALUE_FLAGS)
-  if (!bin || bin === '--') {
+  if (target === -1) {
     return false
   }
-  if (bin.lastIndexOf('@') > 0) {
+  const bin = words[target].value
+  if (bin.lastIndexOf('@') > 0 || !hasLocalBin(ctx.cwd, bin)) {
     return true
   }
-  return !hasLocalBin(cwd, bin)
+  return Boolean(classifyLocalWrapper(words, target, ctx))
+}
+
+function helpBeforeTarget(words, from, valueFlags) {
+  const target = runnerTarget(words, from, valueFlags)
+  return hasFlag(words, from, INFO_FLAGS, target === -1 ? words.length : target)
 }
 
 function classifyNpm(words, from, ctx) {
-  const sub = findSubcommand(words, from, NPM_VALUE_FLAGS)
+  const sub = findKnownSubcommand(words, from, NPM_VALUE_FLAGS, NPM_SUBCOMMANDS)
   if (!sub) {
     return undefined
   }
   const after = sub.index + 1
   if (sub.value === 'exec' || sub.value === 'x') {
-    return npxFetches(words, after, ctx.cwd) ? 'npm' : undefined
+    return npxFetches(words, after, ctx) ? 'npm' : undefined
   }
   if (NPM_VERBS.has(sub.value)) {
     return hasFlag(words, after, HELP_FLAGS) ||
-      isSfwSelfInstall(words, from, sub)
+      isSfwSelfInstall(words, from, sub, NPM_VALUE_FLAGS)
       ? undefined
       : 'npm'
   }
   if (sub.value === 'audit') {
-    return positionalArgs(words, after)[0] === 'fix' ? 'npm' : undefined
+    return positionalArgs(words, after, NPM_VALUE_FLAGS)[0] === 'fix'
+      ? 'npm'
+      : undefined
   }
   if (sub.value === 'create' || sub.value === 'init') {
-    return positionalArgs(words, after).length ? 'npm' : undefined
+    return positionalArgs(words, after, NPM_INIT_VALUE_FLAGS).length
+      ? 'npm'
+      : undefined
   }
   return undefined
 }
 
-function classifyPnpm(words, from) {
-  const sub = findSubcommand(words, from, PNPM_VALUE_FLAGS)
-  if (!sub) {
-    return undefined
-  }
+function classifyPnpmSubcommand(words, from, sub, ctx) {
   const after = sub.index + 1
+  if (sub.value === 'exec') {
+    return classifyCommandAt(
+      words,
+      runnerTarget(words, after, PNPM_VALUE_FLAGS),
+      ctx,
+    )
+  }
+  if (sub.value === 'dlx') {
+    return helpBeforeTarget(words, after, PNPM_VALUE_FLAGS) ? undefined : 'pnpm'
+  }
   if (hasFlag(words, after, HELP_FLAGS)) {
     return undefined
   }
   if (PNPM_VERBS.has(sub.value)) {
-    return isSfwSelfInstall(words, from, sub) ? undefined : 'pnpm'
+    return isSfwSelfInstall(words, from, sub, PNPM_VALUE_FLAGS)
+      ? undefined
+      : 'pnpm'
   }
-  if (sub.value === 'dlx') {
-    return 'pnpm'
-  }
-  return sub.value === 'create' && positionalArgs(words, after).length
+  return sub.value === 'create' &&
+    positionalArgs(words, after, PNPM_VALUE_FLAGS).length
     ? 'pnpm'
     : undefined
 }
 
-function classifyYarnWorkspaces(words, after) {
+function classifyPnpm(words, from, ctx) {
+  const sub = findKnownSubcommand(
+    words,
+    from,
+    PNPM_VALUE_FLAGS,
+    PNPM_SUBCOMMANDS,
+  )
+  if (!sub) {
+    return undefined
+  }
+  if (PNPM_RECURSIVE.has(sub.value)) {
+    return classifyPnpm(words, sub.index + 1, ctx)
+  }
+  return classifyPnpmSubcommand(words, from, sub, ctx)
+}
+
+function classifyYarnWorkspaces(words, after, ctx) {
   const next = findSubcommand(words, after, YARN_VALUE_FLAGS)
   if (next?.value === 'focus') {
     return 'yarn'
   }
-  return next?.value === 'foreach' &&
-    positionalArgs(words, next.index + 1).some(arg => YARN_VERBS.has(arg))
-    ? 'yarn'
+  if (next?.value !== 'foreach') {
+    return undefined
+  }
+  const command = findSubcommand(
+    words,
+    next.index + 1,
+    YARN_FOREACH_VALUE_FLAGS,
+  )
+  return command && command.value !== 'run'
+    ? classifyYarn(words, command.index, ctx)
     : undefined
 }
 
 function classifyYarnGlobal(words, from, sub) {
   const next = findSubcommand(words, sub.index + 1, YARN_VALUE_FLAGS)
-  return next?.value === 'add' && !isSfwSelfInstall(words, from, sub)
+  return next?.value === 'add' &&
+    !isSfwSelfInstall(words, from, sub, YARN_VALUE_FLAGS)
     ? 'yarn'
     : undefined
 }
 
-function classifyYarnSubcommand(words, from, sub) {
+function classifyYarnNested(words, from, sub, ctx) {
   const after = sub.index + 1
-  if (YARN_VERBS.has(sub.value) || sub.value === 'dlx') {
-    return 'yarn'
-  }
-  if (sub.value === 'global') {
-    return classifyYarnGlobal(words, from, sub)
+  if (sub.value === 'exec') {
+    return classifyCommandAt(
+      words,
+      runnerTarget(words, after, YARN_VALUE_FLAGS),
+      ctx,
+    )
   }
   if (sub.value === 'workspace') {
-    const rest = findSubcommand(words, after + 1, YARN_VALUE_FLAGS)
-    return rest && YARN_VERBS.has(rest.value) ? 'yarn' : undefined
+    const name = findSubcommand(words, after, YARN_VALUE_FLAGS)
+    return name ? classifyYarn(words, name.index + 1, ctx) : undefined
   }
   if (sub.value === 'workspaces') {
-    return classifyYarnWorkspaces(words, after)
+    return classifyYarnWorkspaces(words, after, ctx)
   }
-  return sub.value === 'create' && positionalArgs(words, after).length
+  return sub.value === 'global'
+    ? classifyYarnGlobal(words, from, sub)
+    : undefined
+}
+
+function classifyYarnSubcommand(words, from, sub, ctx) {
+  const after = sub.index + 1
+  if (sub.value === 'dlx') {
+    return helpBeforeTarget(words, after, YARN_VALUE_FLAGS) ? undefined : 'yarn'
+  }
+  const nested = classifyYarnNested(words, from, sub, ctx)
+  if (nested || hasFlag(words, after, HELP_FLAGS)) {
+    return nested
+  }
+  if (YARN_VERBS.has(sub.value)) {
+    return 'yarn'
+  }
+  return sub.value === 'create' &&
+    positionalArgs(words, after, YARN_VALUE_FLAGS).length
     ? 'yarn'
     : undefined
 }
 
-function classifyYarn(words, from) {
-  const sub = findSubcommand(words, from, YARN_VALUE_FLAGS)
+function classifyYarn(words, from, ctx) {
+  const sub = findKnownSubcommand(
+    words,
+    from,
+    YARN_VALUE_FLAGS,
+    YARN_SUBCOMMANDS,
+  )
   if (!sub) {
     return hasFlag(words, from, INFO_FLAGS) ? undefined : 'yarn'
   }
-  if (hasFlag(words, sub.index + 1, HELP_FLAGS)) {
-    return undefined
-  }
-  return classifyYarnSubcommand(words, from, sub)
+  return classifyYarnSubcommand(words, from, sub, ctx)
 }
 
 function classifyVerb(ecosystem, verbs, words, from, valueFlags) {
-  const sub = findSubcommand(words, from, valueFlags)
+  const sub = findKnownSubcommand(words, from, valueFlags, verbs)
   if (!sub || !verbs.has(sub.value)) {
     return undefined
   }
   return hasFlag(words, sub.index + 1, HELP_FLAGS) ? undefined : ecosystem
 }
 
-function classifyUvSubcommand(words, sub) {
+function classifyUvTool(words, after) {
+  const sub = findSubcommand(words, after, UV_VALUE_FLAGS)
+  if (!sub || !UV_TOOL_VERBS.has(sub.value)) {
+    return undefined
+  }
+  if (sub.value === 'run') {
+    return helpBeforeTarget(words, sub.index + 1, UVX_VALUE_FLAGS)
+      ? undefined
+      : 'uv'
+  }
+  return hasFlag(words, sub.index + 1, HELP_FLAGS) ? undefined : 'uv'
+}
+
+function classifyUvRun(words, after, ctx) {
+  if (hasFlagMatching(words, after, UV_WITH_RE)) {
+    return 'uv'
+  }
+  return classifyCommandAt(
+    words,
+    runnerTarget(words, after, UV_RUN_VALUE_FLAGS),
+    ctx,
+  )
+}
+
+function classifyUvSubcommand(words, sub, ctx) {
   const after = sub.index + 1
   if (sub.value === 'add' || sub.value === 'sync') {
-    return 'uv'
+    return hasFlag(words, after, HELP_FLAGS) ? undefined : 'uv'
   }
   if (sub.value === 'pip') {
     return classifyVerb('uv', UV_PIP_VERBS, words, after, UV_VALUE_FLAGS)
   }
   if (sub.value === 'tool') {
-    return classifyVerb('uv', UV_TOOL_VERBS, words, after, UV_VALUE_FLAGS)
+    return classifyUvTool(words, after)
   }
   if (sub.value === 'run') {
-    return hasFlagMatching(words, after, UV_WITH_RE) ? 'uv' : undefined
+    return classifyUvRun(words, after, ctx)
   }
   return sub.value === 'venv' && hasFlag(words, after, flagSet('--seed'))
     ? 'uv'
     : undefined
 }
 
-function classifyUv(words, from) {
+function classifyUv(words, from, ctx) {
   const sub = findSubcommand(words, from, UV_VALUE_FLAGS)
-  if (!sub || hasFlag(words, sub.index + 1, HELP_FLAGS)) {
-    return undefined
-  }
-  return classifyUvSubcommand(words, sub)
+  return sub ? classifyUvSubcommand(words, sub, ctx) : undefined
 }
 
 function classifyCargo(words, from) {
-  const sub = findSubcommand(words, from, CARGO_VALUE_FLAGS)
+  const sub = findKnownSubcommand(words, from, CARGO_VALUE_FLAGS, CARGO_VERBS)
   if (!sub || !CARGO_VERBS.has(sub.value)) {
     return undefined
   }
@@ -1268,26 +1655,27 @@ function classifyCargo(words, from) {
   return 'cargo'
 }
 
+const PYTHON_MODULE_RE = /^-[A-Za-ln-z]*m(.*)$/
+
 function pythonModule(words, index) {
   for (let i = index + 1, { length } = words; i < length; i += 1) {
     const value = words[i].value
-    if (value === '-m' && i + 1 < length) {
-      return { name: words[i + 1].value, from: i + 2 }
-    }
-    if (value.startsWith('-m') && value.length > 2) {
-      return { name: value.slice(2).replace(/^=/, ''), from: i + 1 }
+    const match = value.startsWith('--') ? null : PYTHON_MODULE_RE.exec(value)
+    if (match) {
+      const inline = match[1].replace(/^=/, '')
+      return inline
+        ? { name: inline, from: i + 1 }
+        : { name: words[i + 1]?.value ?? '', from: i + 2 }
     }
     if (value === '-c' || !value.startsWith('-')) {
       return undefined
     }
-    if (PYTHON_VALUE_FLAGS.has(value)) {
-      i += 1
-    }
+    i += PYTHON_VALUE_FLAGS.has(value) ? 1 : 0
   }
   return undefined
 }
 
-function classifyPython(words, index) {
+function classifyPython(words, index, ctx) {
   const module = pythonModule(words, index)
   if (!module) {
     return undefined
@@ -1295,14 +1683,15 @@ function classifyPython(words, index) {
   if (PIP_RE.test(module.name)) {
     return classifyVerb('pip', PIP_VERBS, words, module.from, PIP_VALUE_FLAGS)
   }
-  return module.name === 'uv' ? classifyUv(words, module.from) : undefined
+  return module.name === 'uv' ? classifyUv(words, module.from, ctx) : undefined
 }
 
-function classifyAlwaysFetches(ecosystem, words, from) {
-  const args = positionalArgs(words, from)
-  return args.length && !hasFlag(words, from, INFO_FLAGS)
-    ? ecosystem
-    : undefined
+function classifyAlwaysFetches(ecosystem, words, from, valueFlags) {
+  const target = runnerTarget(words, from, valueFlags)
+  if (target === -1 || hasFlag(words, from, INFO_FLAGS, target)) {
+    return undefined
+  }
+  return ecosystem
 }
 
 const CLASSIFIERS = {
@@ -1310,12 +1699,14 @@ const CLASSIFIERS = {
   cargo: (words, index) => classifyCargo(words, index + 1),
   npm: (words, index, ctx) => classifyNpm(words, index + 1, ctx),
   npx: (words, index, ctx) =>
-    npxFetches(words, index + 1, ctx.cwd) ? 'npm' : undefined,
-  pnpm: (words, index) => classifyPnpm(words, index + 1),
-  pnpx: (words, index) => classifyAlwaysFetches('pnpm', words, index + 1),
-  uv: (words, index) => classifyUv(words, index + 1),
-  uvx: (words, index) => classifyAlwaysFetches('uv', words, index + 1),
-  yarn: (words, index) => classifyYarn(words, index + 1),
+    npxFetches(words, index + 1, ctx) ? 'npm' : undefined,
+  pnpm: (words, index, ctx) => classifyPnpm(words, index + 1, ctx),
+  pnpx: (words, index) =>
+    classifyAlwaysFetches('pnpm', words, index + 1, PNPM_VALUE_FLAGS),
+  uv: (words, index, ctx) => classifyUv(words, index + 1, ctx),
+  uvx: (words, index) =>
+    classifyAlwaysFetches('uv', words, index + 1, UVX_VALUE_FLAGS),
+  yarn: (words, index, ctx) => classifyYarn(words, index + 1, ctx),
 }
 
 export function classifyInstall(words, index, ctx = {}) {
@@ -1327,7 +1718,7 @@ export function classifyInstall(words, index, ctx = {}) {
   if (PIP_RE.test(base)) {
     return classifyVerb('pip', PIP_VERBS, words, index + 1, PIP_VALUE_FLAGS)
   }
-  return PYTHON_RE.test(base) ? classifyPython(words, index) : undefined
+  return PYTHON_RE.test(base) ? classifyPython(words, index, ctx) : undefined
 }
 
 /**
@@ -1431,6 +1822,22 @@ function scanSegment(state, segment, previous) {
   }
 }
 
+const DIRECTORY_CHANGERS = new Set(['cd', 'pushd'])
+
+export function nextWorkingDirectory(cwd, words) {
+  const { index } = resolveCommandWord(words)
+  if (index === -1 || !DIRECTORY_CHANGERS.has(words[index].value)) {
+    return cwd
+  }
+  const target = words
+    .slice(index + 1)
+    .find(word => !word.value.startsWith('-'))?.value
+  if (!cwd || !target || /[$~`]/.test(target)) {
+    return undefined
+  }
+  return path.resolve(cwd, target)
+}
+
 function collectInstalls(parent, command, depth) {
   if (typeof command !== 'string' || !command.trim()) {
     return
@@ -1448,6 +1855,7 @@ function collectInstalls(parent, command, depth) {
   const segments = splitShellSegments(tokens)
   for (let i = 0, { length } = segments; i < length; i += 1) {
     scanSegment(state, segments[i], segments[i - 1])
+    state.cwd = nextWorkingDirectory(state.cwd, segments[i].words)
   }
   for (let i = 0, { length } = substitutions; i < length; i += 1) {
     collectInstalls(state, substitutions[i], depth + 1)
@@ -1457,7 +1865,8 @@ function collectInstalls(parent, command, depth) {
 function dedupeFindings(found) {
   const seen = new Set()
   return found.filter(finding => {
-    const key = `${finding.ecosystem}\0${finding.suggestion || finding.command}`
+    const text = (finding.suggestion || finding.command).replace(/[\s{}]+$/, '')
+    const key = `${finding.ecosystem}\0${text}`
     if (seen.has(key)) {
       return false
     }
@@ -1472,7 +1881,7 @@ export function findUnprotectedInstalls(command, options) {
     return [unverifiableFinding('', 'a command too long to check')]
   }
   const found = []
-  const modes = platform === 'win32' ? [false, true] : [false]
+  const modes = platform === 'win32' ? [true, false] : [false]
   for (let i = 0, { length } = modes; i < length; i += 1) {
     collectInstalls({ cwd, found, windows: modes[i] }, command, 0)
   }
@@ -1503,8 +1912,13 @@ function describeFindings(installs) {
 }
 
 export function evaluateInstallCommand(command, options) {
-  const { cwd, env = process.env, platform } = { __proto__: null, ...options }
-  if (env.SOCKET_INSTALL_GATE === 'off') {
+  const {
+    cwd,
+    env = process.env,
+    platform,
+    strict = false,
+  } = { __proto__: null, ...options }
+  if (!strict && env.SOCKET_INSTALL_GATE === 'off') {
     return { decision: 'allow' }
   }
   const installs = findUnprotectedInstalls(command, { cwd, platform })
@@ -1518,7 +1932,8 @@ export function evaluateInstallCommand(command, options) {
   const agentMessage =
     `Protected by Socket: this command installs packages without Socket Firewall, so it was not run.\n` +
     `${setup}Run the install through sfw instead:\n${describeFindings(installs)}\n` +
-    `sfw checks every package against Socket before it downloads and blocks known malware. Docs: ${SFW_DOCS_URL}`
+    `sfw checks packages downloaded from public registries against Socket and blocks confirmed malware. ` +
+    `If this project installs only from a private registry, which sfw does not support, stop and ask the user. Docs: ${SFW_DOCS_URL}`
   const userMessage =
     `Protected by Socket: package installs run through Socket Firewall (sfw). ` +
     `${sfwInstalled ? '' : `Install it with \`${SFW_INSTALL_COMMAND}\`. `}` +
@@ -1538,7 +1953,8 @@ export function evaluateInstallCommand(command, options) {
  *   run through Socket Firewall.
  */
 
-export function buildCursorHookResponse(input, env) {
+export function buildCursorHookResponse(input, env, options) {
+  const { strict = false } = { __proto__: null, ...options }
   if (
     !input ||
     typeof input !== 'object' ||
@@ -1551,6 +1967,7 @@ export function buildCursorHookResponse(input, env) {
   const result = evaluateInstallCommand(input.command, {
     cwd: typeof input.cwd === 'string' ? input.cwd : undefined,
     env,
+    strict,
   })
   if (result.decision === 'allow') {
     return { permission: 'allow' }
@@ -1584,10 +2001,10 @@ export async function readStdin(stream) {
   return text
 }
 
-export async function runCursorHook(stream, env) {
+export async function runCursorHook(stream, env, options) {
   const text = await readStdin(stream)
   const input = JSON.parse(text)
-  return buildCursorHookResponse(input, env)
+  return buildCursorHookResponse(input, env, options)
 }
 
 export function isEntryScript(moduleUrl, argvPath) {
@@ -1602,7 +2019,9 @@ export function isEntryScript(moduleUrl, argvPath) {
 }
 
 if (isEntryScript(import.meta.url, process.argv[1])) {
-  runCursorHook(process.stdin, process.env).then(
+  runCursorHook(process.stdin, process.env, {
+    strict: process.argv.includes('--strict'),
+  }).then(
     response => {
       process.stdout.write(`${JSON.stringify(response)}\n`)
     },

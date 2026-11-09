@@ -7,10 +7,11 @@
 
 import path from 'node:path'
 
-export const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
+export const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/
 
 const KEYWORDS = new Set([
   '!',
+  'coproc',
   'do',
   'elif',
   'else',
@@ -24,9 +25,47 @@ function flags(...names) {
   return new Set(names)
 }
 
+const PYTHON_ENV_RUN = { subcommands: flags('run') }
+
+const DASH_C_STOP = flags('-c', '--command')
+
 const WRAPPERS = {
   __proto__: null,
+  arch: {},
   builtin: {},
+  caffeinate: { valueFlags: flags('-t', '-w') },
+  conda: {
+    subcommands: flags('run'),
+    valueFlags: flags('-n', '-p', '--cwd', '--name', '--prefix'),
+  },
+  direnv: { positionals: 1, subcommands: flags('exec') },
+  flock: { positionals: 1, stopFlags: DASH_C_STOP, valueFlags: flags('-w') },
+  hatch: PYTHON_ENV_RUN,
+  lerna: {
+    subcommands: flags('exec'),
+    valueFlags: flags('--concurrency', '--ignore', '--scope'),
+  },
+  mamba: {
+    subcommands: flags('run'),
+    valueFlags: flags('-n', '-p', '--name', '--prefix'),
+  },
+  micromamba: {
+    subcommands: flags('run'),
+    valueFlags: flags('-n', '-p', '--name', '--prefix'),
+  },
+  parallel: { valueFlags: flags('-j', '-P', '--jobs') },
+  pdm: PYTHON_ENV_RUN,
+  pipenv: PYTHON_ENV_RUN,
+  poetry: PYTHON_ENV_RUN,
+  rye: PYTHON_ENV_RUN,
+  runuser: {
+    stopFlags: DASH_C_STOP,
+    valueFlags: flags('-g', '-u', '--group', '--user'),
+  },
+  script: { positionals: 1, stopFlags: DASH_C_STOP, valueFlags: flags('-t') },
+  setsid: {},
+  taskset: { positionals: 1 },
+  unbuffer: {},
   chrt: { positionals: 1 },
   command: { lookupFlags: flags('-v', '-V') },
   corepack: {},
@@ -40,7 +79,7 @@ const WRAPPERS = {
   },
   exec: { valueFlags: flags('-a') },
   ionice: { valueFlags: flags('-c', '-n', '-p', '--class', '--classdata') },
-  mise: { subcommands: flags('exec', 'x') },
+  mise: { skipToDoubleDash: true, subcommands: flags('exec', 'x') },
   nice: { valueFlags: flags('-n', '--adjustment') },
   nohup: {},
   stdbuf: { valueFlags: flags('-i', '-o', '-e') },
@@ -71,7 +110,10 @@ const WRAPPERS = {
     positionals: 1,
     valueFlags: flags('-k', '-s', '--kill-after', '--signal'),
   },
-  volta: { subcommands: flags('run') },
+  volta: {
+    subcommands: flags('run'),
+    valueFlags: flags('--env', '--node', '--npm', '--pnpm', '--yarn'),
+  },
   xargs: {
     valueFlags: flags(
       '-a',
@@ -117,7 +159,10 @@ const DASH_C_RUNNERS = {
 
 export function commandBaseName(word) {
   const base = path.posix.basename(word.replaceAll('\\', '/'))
-  return base.replace(/\.(?:bat|cmd|exe|ps1)$/i, '').toLowerCase()
+  return base
+    .replace(/\.(?:bat|cmd|exe|ps1)$/i, '')
+    .replace(/(?<=.)@[\w.^~<>=*-]*$/, '')
+    .toLowerCase()
 }
 
 export function skipKeywords(words) {
@@ -144,8 +189,11 @@ function wrapperOptionStep(spec, value) {
   if (spec.lookupFlags?.has(value)) {
     return 'lookup'
   }
-  if (spec.stopFlags?.has(value) || /^(?:-S|--split-string=)./.test(value)) {
-    return spec.stopFlags ? 'stop' : 1
+  if (
+    spec.stopFlags?.has(value) ||
+    (spec.stopFlags?.has('-S') && /^(?:-S|--split-string=)./.test(value))
+  ) {
+    return 'stop'
   }
   return spec.valueFlags?.has(value) ? 2 : 1
 }
@@ -184,7 +232,16 @@ function wrapperArgsStart(spec, words, index) {
     return index + 1
   }
   const sub = words[index + 1]?.value
-  return sub && spec.subcommands.has(sub) ? index + 2 : -1
+  if (!sub || !spec.subcommands.has(sub)) {
+    return -1
+  }
+  if (spec.skipToDoubleDash) {
+    const dashes = words.findIndex(
+      (word, i) => i > index && word.value === '--',
+    )
+    return dashes === -1 ? index + 2 : dashes
+  }
+  return index + 2
 }
 
 export function resolveCommandWord(words) {
@@ -207,6 +264,7 @@ export function resolveCommandWord(words) {
       return { index: i }
     }
     i = skipped.next
+    i += skipKeywords(words.slice(i))
   }
   return { index: -1 }
 }
@@ -230,10 +288,27 @@ function isDashC(value) {
   return /^[a-z]+$/i.test(letters) && letters.includes('c')
 }
 
+const SHELL_OPTION_VALUE_FLAGS = flags('-o', '+o', '-O', '+O')
+
+function shellOperand(words, from) {
+  let i = from
+  while (i < words.length) {
+    const value = words[i].value
+    if (value === '--') {
+      return words[i + 1]?.value
+    }
+    if (!/^[-+]./.test(value)) {
+      return value
+    }
+    i += SHELL_OPTION_VALUE_FLAGS.has(value) ? 2 : 1
+  }
+  return undefined
+}
+
 function posixShellScript(words, index) {
-  for (let i = index + 1, { length } = words; i < length - 1; i += 1) {
+  for (let i = index + 1, { length } = words; i < length; i += 1) {
     if (isDashC(words[i].value)) {
-      return words[i + 1].value
+      return shellOperand(words, i + 1)
     }
   }
   return undefined
@@ -288,13 +363,22 @@ function positionalFrom(words, from, valueFlags) {
   return i
 }
 
+const GIT_VALUE_FLAGS = flags(
+  '-C',
+  '-c',
+  '--git-dir',
+  '--namespace',
+  '--work-tree',
+)
+
 function gitScript(words, index) {
-  const sub = words[index + 1]?.value
-  if (sub === 'submodule' && words[index + 2]?.value === 'foreach') {
-    return joinWords(words, positionalFrom(words, index + 3, new Set()))
+  const subIndex = positionalFrom(words, index + 1, GIT_VALUE_FLAGS)
+  const sub = words[subIndex]?.value
+  if (sub === 'submodule' && words[subIndex + 1]?.value === 'foreach') {
+    return joinWords(words, positionalFrom(words, subIndex + 2, new Set()))
   }
-  if (sub === 'bisect' && words[index + 2]?.value === 'run') {
-    return joinWords(words, index + 3)
+  if (sub === 'bisect' && words[subIndex + 1]?.value === 'run') {
+    return joinWords(words, subIndex + 2)
   }
   if (sub === 'rebase') {
     return optionValue(words, index, flags('-x', '--exec'))
@@ -349,6 +433,7 @@ const SCRIPT_RUNNERS = {
   gh: ghScript,
   git: gitScript,
   nix: nixScript,
+  trap: (words, index) => words[index + 1]?.value,
   watch: watchScript,
 }
 

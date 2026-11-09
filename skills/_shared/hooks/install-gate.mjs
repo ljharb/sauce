@@ -113,6 +113,22 @@ function scanSegment(state, segment, previous) {
   }
 }
 
+const DIRECTORY_CHANGERS = new Set(['cd', 'pushd'])
+
+export function nextWorkingDirectory(cwd, words) {
+  const { index } = resolveCommandWord(words)
+  if (index === -1 || !DIRECTORY_CHANGERS.has(words[index].value)) {
+    return cwd
+  }
+  const target = words
+    .slice(index + 1)
+    .find(word => !word.value.startsWith('-'))?.value
+  if (!cwd || !target || /[$~`]/.test(target)) {
+    return undefined
+  }
+  return path.resolve(cwd, target)
+}
+
 function collectInstalls(parent, command, depth) {
   if (typeof command !== 'string' || !command.trim()) {
     return
@@ -130,6 +146,7 @@ function collectInstalls(parent, command, depth) {
   const segments = splitShellSegments(tokens)
   for (let i = 0, { length } = segments; i < length; i += 1) {
     scanSegment(state, segments[i], segments[i - 1])
+    state.cwd = nextWorkingDirectory(state.cwd, segments[i].words)
   }
   for (let i = 0, { length } = substitutions; i < length; i += 1) {
     collectInstalls(state, substitutions[i], depth + 1)
@@ -139,7 +156,8 @@ function collectInstalls(parent, command, depth) {
 function dedupeFindings(found) {
   const seen = new Set()
   return found.filter(finding => {
-    const key = `${finding.ecosystem}\0${finding.suggestion || finding.command}`
+    const text = (finding.suggestion || finding.command).replace(/[\s{}]+$/, '')
+    const key = `${finding.ecosystem}\0${text}`
     if (seen.has(key)) {
       return false
     }
@@ -154,7 +172,7 @@ export function findUnprotectedInstalls(command, options) {
     return [unverifiableFinding('', 'a command too long to check')]
   }
   const found = []
-  const modes = platform === 'win32' ? [false, true] : [false]
+  const modes = platform === 'win32' ? [true, false] : [false]
   for (let i = 0, { length } = modes; i < length; i += 1) {
     collectInstalls({ cwd, found, windows: modes[i] }, command, 0)
   }
@@ -185,8 +203,13 @@ function describeFindings(installs) {
 }
 
 export function evaluateInstallCommand(command, options) {
-  const { cwd, env = process.env, platform } = { __proto__: null, ...options }
-  if (env.SOCKET_INSTALL_GATE === 'off') {
+  const {
+    cwd,
+    env = process.env,
+    platform,
+    strict = false,
+  } = { __proto__: null, ...options }
+  if (!strict && env.SOCKET_INSTALL_GATE === 'off') {
     return { decision: 'allow' }
   }
   const installs = findUnprotectedInstalls(command, { cwd, platform })
@@ -200,7 +223,8 @@ export function evaluateInstallCommand(command, options) {
   const agentMessage =
     `Protected by Socket: this command installs packages without Socket Firewall, so it was not run.\n` +
     `${setup}Run the install through sfw instead:\n${describeFindings(installs)}\n` +
-    `sfw checks every package against Socket before it downloads and blocks known malware. Docs: ${SFW_DOCS_URL}`
+    `sfw checks packages downloaded from public registries against Socket and blocks confirmed malware. ` +
+    `If this project installs only from a private registry, which sfw does not support, stop and ask the user. Docs: ${SFW_DOCS_URL}`
   const userMessage =
     `Protected by Socket: package installs run through Socket Firewall (sfw). ` +
     `${sfwInstalled ? '' : `Install it with \`${SFW_INSTALL_COMMAND}\`. `}` +
