@@ -5,7 +5,9 @@ alwaysApply: false
 
 # Socket install protection
 
-This plugin adds a `beforeShellExecution` hook. Before Cursor runs a shell command, the hook looks for package installs (npm, pnpm, yarn, pip, uv, and cargo). An install that does not run through Socket Firewall (`sfw`) is blocked. `sfw` checks every package against Socket before it downloads, and stops known malware. It needs no Socket account and no API key.
+This plugin adds a `beforeShellExecution` hook. Before Cursor runs a shell command, the hook looks for package installs (npm, npx, pnpm, yarn, pip, uv, uvx, and cargo). An install that does not run through Socket Firewall (`sfw`) is blocked. `sfw` checks every package against Socket before it downloads, and stops known malware. It needs no Socket account and no API key.
+
+The hook runs with `node`. If `node` is not on the PATH that Cursor starts with, the hook cannot run and Cursor runs the command without the check.
 
 ## When a command is blocked
 
@@ -13,15 +15,16 @@ The block message starts with "Protected by Socket" and shows the same command w
 
 1. If the message says sfw is not installed, run `npm install -g sfw` first. The hook allows that command.
 2. Run the command from the message, for example `sfw npm install lodash`. Keep every flag and argument.
-3. Do not try to get around the check: do not change the command's spelling, put it in a script, or set environment variables to skip the check. If the user wants to turn the check off, tell them to set `SOCKET_INSTALL_GATE=off` in the environment Cursor starts with.
+3. If the message says the command cannot be checked (for example, it is nested too deeply or encoded), write it again as a plain command with `sfw` in front of the package manager.
+4. Do not try to get around the check: do not change the command's spelling, put it in a script, or set environment variables to skip the check. If the user wants to turn the check off, tell them to set `SOCKET_INSTALL_GATE=off` in the environment Cursor starts with.
 
 If `sfw` itself reports a blocked package, stop and tell the user the package name and version. Do not install it another way. Offer `/socket-inspect` for a full review, or suggest a different package.
 
 ## Protect a project and its Cloud Agents
 
-The plugin hook runs only where the plugin is installed. To protect everyone who opens a repository, including Cloud Agents, add a project hook. Cloud Agents run project hooks but not user hooks.
+The plugin hook runs only where the plugin is installed. To protect everyone who opens the repository as a trusted workspace, including Cloud Agents, add a project hook. Cloud Agents run project hooks but not user hooks.
 
-1. Copy `.cursor-plugin/hooks/socket-install-gate.mjs` from the Socket plugin into the repository as `.cursor/hooks/socket-install-gate.mjs`. You can also download it from `https://github.com/SocketDev/skills/blob/main/.cursor-plugin/hooks/socket-install-gate.mjs`.
+1. Copy `.cursor-plugin/hooks/socket-install-gate.mjs` from the Socket plugin into the repository as `.cursor/hooks/socket-install-gate.mjs`. You can also download it from `https://raw.githubusercontent.com/SocketDev/skills/main/.cursor-plugin/hooks/socket-install-gate.mjs`. The file has no dependencies.
 2. Add this to `.cursor/hooks.json`. Merge it with any hooks that are already there:
 
    ```json
@@ -39,6 +42,8 @@ The plugin hook runs only where the plugin is installed. To protect everyone who
    }
    ```
 
+   With `failClosed: true`, Cursor blocks the command when the hook cannot run, for example when it times out. This also blocks every shell command on a computer without `node`, so use it only where everyone has Node.js.
+
 3. For Cloud Agents, also check the packages that the environment installs before the agent starts. In `.cursor/environment.json`, install `sfw` and put it in front of the install command:
 
    ```json
@@ -48,6 +53,8 @@ The plugin hook runs only where the plugin is installed. To protect everyone who
    ```
 
    Use the repository's own install command (`sfw pnpm install --frozen-lockfile`, `sfw pip install -r requirements.txt`, and so on). Keep the rest of `environment.json` as it is.
+
+   Cursor uses this file only when the Cloud Agents environment is set to read `environment.json` from the repository. If the environment was set up in the Cursor dashboard, put the same `sfw` install command in its install script there. Self-hosted workers need it in their own setup.
 
 ## Protect a whole company
 
@@ -59,7 +66,7 @@ Cursor loads enterprise hooks from a fixed path on each computer. A device manag
 | Linux / WSL | `/etc/cursor/hooks.json`                         |
 | Windows     | `C:\ProgramData\Cursor\hooks.json`               |
 
-Put `socket-install-gate.mjs` in the same folder, and use the hooks.json from the project section with that path in `command`. Enterprise hooks run from that folder. For example, on macOS: `node "/Library/Application Support/Cursor/socket-install-gate.mjs"`.
+Put `socket-install-gate.mjs` in the same folder, and use the hooks.json from the project section with that path in `command`. For example, on macOS: `node "/Library/Application Support/Cursor/socket-install-gate.mjs"`. Install Node.js on every computer before you set `failClosed: true`.
 
 Hooks added in the Cursor team dashboard cannot set `failClosed`, so a crash in the hook lets the command run. Use MDM or a project hook when the check must not fail open.
 

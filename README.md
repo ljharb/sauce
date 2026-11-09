@@ -123,7 +123,7 @@ This repository is a Cursor plugin. It gives Cursor:
 - the skills in `skills/`
 - the Socket MCP server at `https://mcp.socket.dev/` (`.cursor-plugin/mcp.json`)
 - rules that tell the agent when to use the Socket MCP tools, and what to do when an install is blocked (`.cursor-plugin/rules/`)
-- a `beforeShellExecution` hook that blocks npm, pnpm, yarn, pip, uv, and cargo installs that do not run through [Socket Firewall](https://docs.socket.dev/docs/socket-firewall-free) (`.cursor-plugin/hooks.json`)
+- a `beforeShellExecution` hook that blocks npm, npx, pnpm, yarn, pip, uv, uvx, and cargo installs that do not run through [Socket Firewall](https://docs.socket.dev/docs/socket-firewall-free) (`.cursor-plugin/hooks.json`)
 
 Install from repository URL (or local checkout) via the Cursor plugin flow.
 
@@ -134,12 +134,12 @@ To connect to Socket, open **Customize** in the Cursor sidebar, find the Socket 
 
 #### Install protection
 
-The hook stops an install such as `npm install lodash` and tells the agent to run `sfw npm install lodash` instead. `sfw` checks each package against Socket before it downloads and blocks known malware. It needs no account or API key. Install it with `npm install -g sfw`. The hook allows that command. The hook is `failClosed`, so if it crashes, Cursor blocks the command. To turn the check off, start Cursor with `SOCKET_INSTALL_GATE=off`.
+The hook stops an install such as `npm install lodash` and tells the agent to run `sfw npm install lodash` instead. `sfw` checks each package against Socket before it downloads and blocks known malware. It needs no account or API key. Install it with `npm install -g sfw`. The hook allows that command. The hook runs with `node`. If it gets input it cannot read, it blocks the command. If `node` is missing, Cursor runs the command without the check. To turn the check off, start Cursor with `SOCKET_INSTALL_GATE=off`.
 
 The plugin hook protects only computers where the plugin is installed. To protect more:
 
-- **A repository and its Cloud Agents:** copy `.cursor-plugin/hooks/socket-install-gate.mjs` to `.cursor/hooks/` in the repository, and register it in `.cursor/hooks.json` with `failClosed: true`. Cloud Agents run project hooks. Also add `sfw` to the `install` command in `.cursor/environment.json`, for example `npm install -g sfw && sfw npm ci`.
-- **A company:** use MDM to put the hook script and a `hooks.json` at Cursor's enterprise path (`/Library/Application Support/Cursor/` on macOS, `/etc/cursor/` on Linux, `C:\ProgramData\Cursor\` on Windows). Hooks added in the team dashboard cannot set `failClosed`.
+- **A repository and its Cloud Agents:** copy `.cursor-plugin/hooks/socket-install-gate.mjs` to `.cursor/hooks/` in the repository, and register it in `.cursor/hooks.json`. Project hooks run in trusted workspaces and in Cloud Agents. Also put `sfw` in front of the Cloud Agents install command, for example `npm install -g sfw && sfw npm ci`, in `.cursor/environment.json` or in the environment's install script in the Cursor dashboard.
+- **A company:** use MDM to put the hook script and a `hooks.json` at Cursor's enterprise path (`/Library/Application Support/Cursor/` on macOS, `/etc/cursor/` on Linux, `C:\ProgramData\Cursor\` on Windows). Set `failClosed: true` there only if every computer has Node.js. Hooks added in the team dashboard cannot set `failClosed`.
 
 The `socket-install-protection` rule has the exact files.
 

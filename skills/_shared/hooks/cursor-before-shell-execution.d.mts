@@ -13,6 +13,9 @@ export declare function buildCursorHookResponse(
   input: unknown,
   env: InstallGateEnv | undefined,
 ): CursorShellHookResponse
+export declare function buildCursorHookFailure(
+  error: unknown,
+): CursorShellHookResponse
 export declare function readStdin(
   stream: NodeJS.ReadableStream,
 ): Promise<string>

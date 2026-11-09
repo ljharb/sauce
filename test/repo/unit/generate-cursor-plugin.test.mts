@@ -30,11 +30,10 @@ import {
   buildHooksConfig,
   buildMcpConfig,
   CURSOR_HOOK_SCRIPT_RELATIVE,
-  CURSOR_HOOK_SOURCE_RELATIVE,
   CURSOR_HOOKS_RELATIVE,
   CURSOR_LOGO_RELATIVE,
   CURSOR_RULES_RELATIVE,
-  INSTALL_GATE_SOURCE_RELATIVE,
+  HOOK_SOURCES_RELATIVE,
   generateCursorPlugin,
   renderJson,
   SOCKET_MCP_URL,
@@ -96,14 +95,10 @@ function makeFixtureRoot(): string {
     'utf-8',
   )
   writeFileSync(path.join(root, CURSOR_LOGO_RELATIVE), '<svg/>\n', 'utf-8')
-  const hookSources = [
-    INSTALL_GATE_SOURCE_RELATIVE,
-    CURSOR_HOOK_SOURCE_RELATIVE,
-  ]
-  mkdirSync(path.join(root, path.dirname(INSTALL_GATE_SOURCE_RELATIVE)), {
+  mkdirSync(path.join(root, path.dirname(HOOK_SOURCES_RELATIVE[0])), {
     recursive: true,
   })
-  for (const relative of hookSources) {
+  for (const relative of HOOK_SOURCES_RELATIVE) {
     copyFileSync(path.join(REPO_ROOT, relative), path.join(root, relative))
   }
   return root
@@ -219,14 +214,13 @@ it('manifest points at the generated hooks config', () => {
   }
 })
 
-it('hooks config runs the bundled script before shell commands, fail-closed', () => {
+it('hooks config runs the bundled script before shell commands', () => {
   expect(buildHooksConfig()).toStrictEqual({
     version: 1,
     hooks: {
       beforeShellExecution: [
         {
           command: `node "\${CURSOR_PLUGIN_ROOT}/${CURSOR_HOOK_SCRIPT_RELATIVE}"`,
-          failClosed: true,
           timeout: 10,
         },
       ],
@@ -260,10 +254,27 @@ it('bundled hook script is self-contained and answers Cursor', () => {
       expect(JSON.parse(allowed.stdout)).toStrictEqual({ permission: 'allow' })
 
       const broken = runHook(copied, 'not json')
-      expect(broken.status).not.toBe(0)
+      expect(broken.status).toBe(0)
+      expect(JSON.parse(broken.stdout).permission).toBe('deny')
     } finally {
       safeDeleteSync(isolated)
     }
+  } finally {
+    safeDeleteSync(root)
+  }
+})
+
+it('bundling rejects an import it cannot inline', () => {
+  const root = makeFixtureRoot()
+  try {
+    const source = path.join(root, HOOK_SOURCES_RELATIVE[0])
+    writeFileSync(
+      source,
+      `import fs, { readFileSync } from 'node:fs'\n${readFileSync(source, 'utf8')}`,
+    )
+    expect(() => generateCursorPlugin(root, { check: false })).toThrow(
+      HOOK_SOURCES_RELATIVE[0],
+    )
   } finally {
     safeDeleteSync(root)
   }

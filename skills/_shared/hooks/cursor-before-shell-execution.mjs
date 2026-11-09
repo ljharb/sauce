@@ -26,6 +26,19 @@ export function buildCursorHookResponse(input, env) {
   }
 }
 
+export function buildCursorHookFailure(error) {
+  const detail =
+    `Socket install check failed.\n` +
+    `  Where: Cursor beforeShellExecution hook\n` +
+    `  Saw:   ${error?.message ?? error}\n` +
+    `  Fix:   check that Cursor sent JSON hook input on stdin, then run the command again.`
+  return {
+    permission: 'deny',
+    user_message: detail,
+    agent_message: detail,
+  }
+}
+
 export async function readStdin(stream) {
   let text = ''
   stream.setEncoding('utf8')
@@ -58,13 +71,7 @@ if (isEntryScript(import.meta.url, process.argv[1])) {
       process.stdout.write(`${JSON.stringify(response)}\n`)
     },
     error => {
-      process.stderr.write(
-        `Socket install check failed.\n` +
-          `  Where: Cursor beforeShellExecution hook\n` +
-          `  Saw:   ${error?.message ?? error}\n` +
-          `  Fix:   check that Cursor sent JSON hook input on stdin.\n`,
-      )
-      process.exitCode = 1
+      process.stdout.write(`${JSON.stringify(buildCursorHookFailure(error))}\n`)
     },
   )
 }

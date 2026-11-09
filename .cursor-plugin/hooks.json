@@ -4,7 +4,6 @@
     "beforeShellExecution": [
       {
         "command": "node \"${CURSOR_PLUGIN_ROOT}/.cursor-plugin/hooks/socket-install-gate.mjs\"",
-        "failClosed": true,
         "timeout": 10
       }
     ]

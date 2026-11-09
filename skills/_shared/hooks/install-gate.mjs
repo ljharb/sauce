@@ -9,31 +9,71 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 
+import { splitShellSegments, tokenizeShellCommand } from './shell-words.mjs'
+
 export const SOCKET_SIGN_UP_URL = 'https://socket.dev/'
 export const SFW_DOCS_URL = 'https://docs.socket.dev/docs/socket-firewall-free'
 export const SFW_INSTALL_COMMAND = 'npm install -g sfw'
 
-const OPERATORS = ['&&', '||', ';;', '|&', ';', '|', '&', '\n']
+const MAX_DEPTH = 4
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
 
-const PREFIX_COMMANDS = new Set([
-  'builtin',
-  'command',
-  'env',
-  'exec',
-  'nice',
-  'nohup',
-  'sudo',
+const KEYWORDS = new Set([
+  '!',
+  'do',
+  'elif',
+  'else',
+  'if',
+  'then',
   'time',
+  'until',
+  'while',
 ])
 
-const SHELLS = new Set(['bash', 'dash', 'ksh', 'sh', 'zsh'])
+const DATA_COMMANDS = new Set([
+  'apt',
+  'apt-get',
+  'awk',
+  'brew',
+  'cat',
+  'choco',
+  'dnf',
+  'echo',
+  'egrep',
+  'export',
+  'fgrep',
+  'gh',
+  'git',
+  'grep',
+  'head',
+  'less',
+  'man',
+  'more',
+  'printf',
+  'rg',
+  'scoop',
+  'sed',
+  'tail',
+  'tee',
+  'type',
+  'whereis',
+  'which',
+  'winget',
+  'yum',
+])
+
+const POSIX_SHELLS = new Set(['bash', 'dash', 'fish', 'ksh', 'sh', 'zsh'])
+
+const POWERSHELLS = new Set(['powershell', 'pwsh'])
 
 const NPM_INSTALL_VERBS = new Set([
   'add',
   'ci',
+  'cit',
   'clean-install',
+  'ddp',
+  'dedupe',
   'exec',
   'i',
   'ic',
@@ -52,7 +92,6 @@ const NPM_INSTALL_VERBS = new Set([
   'isntall',
   'isntall-clean',
   'it',
-  'cit',
   'udpate',
   'up',
   'update',
@@ -62,9 +101,13 @@ const NPM_INSTALL_VERBS = new Set([
 
 const PNPM_INSTALL_VERBS = new Set([
   'add',
+  'dedupe',
   'dlx',
+  'fetch',
   'i',
   'install',
+  'install-test',
+  'it',
   'up',
   'update',
   'upgrade',
@@ -72,212 +115,129 @@ const PNPM_INSTALL_VERBS = new Set([
 
 const YARN_INSTALL_VERBS = new Set(['add', 'dlx', 'install', 'up', 'upgrade'])
 
-const PIP_INSTALL_VERBS = new Set(['download', 'install'])
+const PIP_INSTALL_VERBS = new Set(['download', 'install', 'wheel'])
 
 const UV_INSTALL_VERBS = new Set(['add', 'sync'])
 
 const CARGO_INSTALL_VERBS = new Set(['add', 'fetch', 'install'])
 
-const VALUE_FLAGS = new Set([
-  '--cwd',
-  '--dir',
-  '--filter',
-  '--prefix',
-  '--workspace',
-  '--workspace-dir',
-  '-C',
-  '-F',
-  '-w',
+const OTHER_VERBS = new Set([
+  'audit',
+  'build',
+  'cache',
+  'check',
+  'config',
+  'create',
+  'freeze',
+  'global',
+  'help',
+  'info',
+  'init',
+  'list',
+  'ls',
+  'outdated',
+  'pack',
+  'pip',
+  'publish',
+  'remove',
+  'rm',
+  'run',
+  'run-script',
+  'search',
+  'show',
+  'start',
+  'test',
+  'tool',
+  'uninstall',
+  'version',
+  'view',
+  'why',
+  'workspace',
+  'workspaces',
 ])
+
+const INFO_FLAGS = new Set(['--help', '--list', '--version', '-V', '-h', '-v'])
 
 const GLOBAL_FLAGS = new Set(['--global', '-g'])
 
-const INFO_FLAGS = new Set(['--help', '--version', '-h', '-v'])
+const WRAPPERS = new Set([
+  'builtin',
+  'command',
+  'corepack',
+  'doas',
+  'env',
+  'exec',
+  'ionice',
+  'nice',
+  'nohup',
+  'stdbuf',
+  'sudo',
+  'timeout',
+  'xargs',
+])
 
 const JS_MANAGERS = {
   __proto__: null,
   npm: {
     bareInstalls: false,
     createVerbs: new Set(['create', 'init']),
-    globalAdd: false,
+    ecosystem: 'npm',
     verbs: NPM_INSTALL_VERBS,
   },
   pnpm: {
     bareInstalls: false,
     createVerbs: new Set(['create']),
-    globalAdd: false,
+    ecosystem: 'pnpm',
     verbs: PNPM_INSTALL_VERBS,
   },
   yarn: {
     bareInstalls: true,
     createVerbs: new Set(['create']),
-    globalAdd: true,
+    ecosystem: 'yarn',
     verbs: YARN_INSTALL_VERBS,
   },
+}
+
+const RUNNERS = {
+  __proto__: null,
+  npx: 'npm',
+  pnpx: 'pnpm',
+  uvx: 'uv',
 }
 
 const UV_NESTED_VERBS = {
   __proto__: null,
   pip: new Set(['install', 'sync']),
-  tool: new Set(['install']),
+  tool: new Set(['install', 'run']),
 }
 
 const PIP_RE = /^pip(?:\d+(?:\.\d+)?)?$/
 
 const PYTHON_RE = /^(?:py|python(?:\d+(?:\.\d+)?)?)$/
 
-const PIP_MODULES = new Set(['pip', 'pip3'])
-
-const GROUPING_CHARS = new Set(['(', ')', '{', '}'])
-
-const WHITESPACE_CHARS = new Set([' ', '\t', '\r'])
-
-function startWord(state, index) {
-  if (state.start === -1) {
-    state.start = index
-  }
-}
-
-function flushWord(state, end) {
-  if (state.start !== -1) {
-    state.tokens.push({
-      type: 'word',
-      value: state.current,
-      start: state.start,
-      end,
-    })
-  }
-  state.current = ''
-  state.start = -1
-}
-
-function matchOperator(command, index) {
-  for (let i = 0, { length } = OPERATORS; i < length; i += 1) {
-    if (command.startsWith(OPERATORS[i], index)) {
-      return OPERATORS[i]
-    }
-  }
-  return ''
-}
-
-function stepQuoted(state, index) {
-  const { command } = state
-  const char = command[index]
-  if (char === state.quote) {
-    state.quote = ''
-    return index + 1
-  }
-  if (char === '\\' && state.quote === '"' && index + 1 < command.length) {
-    state.current += command[index + 1]
-    return index + 2
-  }
-  state.current += char
-  return index + 1
-}
-
-function stepEscape(state, index) {
-  const next = state.command[index + 1]
-  if (next === '\n') {
-    return index + 2
-  }
-  startWord(state, index)
-  state.current += next
-  return index + 2
-}
-
-function skipComment(command, index) {
-  const newline = command.indexOf('\n', index)
-  return newline === -1 ? command.length : newline
-}
-
-function stepTokenizer(state, index) {
-  const { command } = state
-  const char = command[index]
-  if (state.quote) {
-    return stepQuoted(state, index)
-  }
-  if (char === "'" || char === '"') {
-    startWord(state, index)
-    state.quote = char
-    return index + 1
-  }
-  if (char === '\\' && index + 1 < command.length) {
-    return stepEscape(state, index)
-  }
-  const operator = matchOperator(command, index)
-  if (operator) {
-    flushWord(state, index)
-    state.tokens.push({ type: 'operator', value: operator, start: index })
-    return index + operator.length
-  }
-  if (state.start === -1 && GROUPING_CHARS.has(char)) {
-    state.tokens.push({ type: 'operator', value: char, start: index })
-    return index + 1
-  }
-  if (WHITESPACE_CHARS.has(char)) {
-    flushWord(state, index)
-    return index + 1
-  }
-  if (char === '#' && state.start === -1) {
-    return skipComment(command, index)
-  }
-  startWord(state, index)
-  state.current += char
-  return index + 1
-}
-
-export function tokenizeShellCommand(command) {
-  const state = {
-    command,
-    current: '',
-    quote: '',
-    start: -1,
-    tokens: [],
-  }
-  const { length } = command
-  let index = 0
-  while (index < length) {
-    index = stepTokenizer(state, index)
-  }
-  flushWord(state, length)
-  return state.tokens
-}
-
-export function splitShellSegments(tokens) {
-  const segments = []
-  let words = []
-  for (let i = 0, { length } = tokens; i < length; i += 1) {
-    const token = tokens[i]
-    if (token.type === 'operator') {
-      if (words.length) {
-        segments.push(words)
-      }
-      words = []
-      continue
-    }
-    words.push(token)
-  }
-  if (words.length) {
-    segments.push(words)
-  }
-  return segments
-}
+const SFW_PACKAGE_RE = /^sfw(?:@[\w.^~<>=*-]+)?$/
 
 export function commandBaseName(word) {
   const base = path.posix.basename(word.replaceAll('\\', '/'))
-  return base.replace(/\.(?:cmd|exe|ps1)$/i, '').toLowerCase()
+  return base.replace(/\.(?:bat|cmd|exe|ps1)$/i, '').toLowerCase()
 }
 
-function findSubcommand(words, from) {
+function isKnownVerb(verbs, value) {
+  return verbs.has(value) || OTHER_VERBS.has(value)
+}
+
+export function findSubcommand(words, from, verbs) {
+  let afterFlag = false
   for (let i = from, { length } = words; i < length; i += 1) {
     const value = words[i].value
     if (value.startsWith('-')) {
-      if (VALUE_FLAGS.has(value)) {
-        i += 1
-      }
+      afterFlag = !value.includes('=')
       continue
     }
-    return { index: i, value }
+    if (isKnownVerb(verbs, value) || !afterFlag) {
+      return { index: i, value }
+    }
+    afterFlag = false
   }
   return undefined
 }
@@ -285,116 +245,94 @@ function findSubcommand(words, from) {
 function positionalArgs(words, from) {
   const args = []
   for (let i = from, { length } = words; i < length; i += 1) {
-    const value = words[i].value
-    if (value.startsWith('-')) {
-      if (VALUE_FLAGS.has(value)) {
-        i += 1
-      }
-      continue
+    if (!words[i].value.startsWith('-')) {
+      args.push(words[i].value)
     }
-    args.push(value)
   }
   return args
 }
 
-function hasGlobalFlag(words, from) {
+function hasFlag(words, from, flags) {
   for (let i = from, { length } = words; i < length; i += 1) {
-    if (GLOBAL_FLAGS.has(words[i].value)) {
+    if (flags.has(words[i].value)) {
       return true
     }
   }
   return false
 }
 
-export function isSfwSelfInstall(words, from) {
-  const sub = findSubcommand(words, from)
-  if (!sub) {
+export function isSfwSelfInstall(words, from, sub) {
+  const isGlobal = sub.value === 'global' || hasFlag(words, from, GLOBAL_FLAGS)
+  if (!isGlobal) {
     return false
   }
-  let argsFrom = sub.index + 1
+  const args = positionalArgs(words, sub.index + 1).filter(arg => arg !== 'add')
+  return args.length > 0 && args.every(arg => SFW_PACKAGE_RE.test(arg))
+}
+
+function classifyYarnWorkspace(rules, words, sub) {
+  if (sub.value === 'workspace') {
+    const rest = findSubcommand(words, sub.index + 2, rules.verbs)
+    return rest && rules.verbs.has(rest.value) ? rules.ecosystem : undefined
+  }
+  const next = findSubcommand(words, sub.index + 1, rules.verbs)
+  if (next?.value === 'focus') {
+    return rules.ecosystem
+  }
+  if (next?.value === 'foreach') {
+    const args = positionalArgs(words, next.index + 1)
+    return args.some(arg => rules.verbs.has(arg)) ? rules.ecosystem : undefined
+  }
+  return undefined
+}
+
+function classifyJsSubcommand(rules, words, from, sub) {
+  if (rules.verbs.has(sub.value)) {
+    return isSfwSelfInstall(words, from, sub) ? undefined : rules.ecosystem
+  }
   if (sub.value === 'global') {
-    const next = findSubcommand(words, argsFrom)
-    if (!next) {
-      return false
-    }
-    argsFrom = next.index + 1
-  } else if (!hasGlobalFlag(words, from)) {
-    return false
-  }
-  const args = positionalArgs(words, argsFrom)
-  if (args.length === 0) {
-    return false
-  }
-  for (let i = 0, { length } = args; i < length; i += 1) {
-    if (!/^sfw(?:@[\w.^~<>=*-]+)?$/.test(args[i])) {
-      return false
-    }
-  }
-  return true
-}
-
-function pipModuleStart(words, index) {
-  const base = commandBaseName(words[index].value)
-  if (!PYTHON_RE.test(base)) {
-    return -1
-  }
-  for (let i = index + 1, { length } = words; i < length - 1; i += 1) {
-    const value = words[i].value
-    if (value === '-m') {
-      return PIP_MODULES.has(words[i + 1].value) ? i + 2 : -1
-    }
-    if (!value.startsWith('-')) {
-      return -1
-    }
-  }
-  return -1
-}
-
-function hasInfoFlag(words, from) {
-  for (let i = from, { length } = words; i < length; i += 1) {
-    if (INFO_FLAGS.has(words[i].value)) {
-      return true
-    }
-  }
-  return false
-}
-
-function isGlobalAdd(words, sub) {
-  const next = findSubcommand(words, sub.index + 1)
-  return next?.value === 'add'
-}
-
-function classifyJsManager(ecosystem, rules, words, from) {
-  const sub = findSubcommand(words, from)
-  if (!sub) {
-    return rules.bareInstalls && !hasInfoFlag(words, from)
-      ? ecosystem
+    const next = findSubcommand(words, sub.index + 1, rules.verbs)
+    return next?.value === 'add' && !isSfwSelfInstall(words, from, sub)
+      ? rules.ecosystem
       : undefined
   }
-  if (rules.verbs.has(sub.value)) {
-    return isSfwSelfInstall(words, from) ? undefined : ecosystem
+  if (sub.value === 'workspace' || sub.value === 'workspaces') {
+    return classifyYarnWorkspace(rules, words, sub)
   }
-  if (rules.globalAdd && sub.value === 'global') {
-    return isGlobalAdd(words, sub) && !isSfwSelfInstall(words, from)
-      ? ecosystem
+  if (sub.value === 'audit') {
+    return positionalArgs(words, sub.index + 1)[0] === 'fix'
+      ? rules.ecosystem
       : undefined
   }
   if (
     rules.createVerbs.has(sub.value) &&
     positionalArgs(words, sub.index + 1).length
   ) {
-    return ecosystem
+    return rules.ecosystem
   }
   return undefined
 }
 
+function classifyJsManager(rules, words, from, atCommand) {
+  const sub = findSubcommand(words, from, rules.verbs)
+  if (!sub) {
+    return rules.bareInstalls && atCommand && !hasFlag(words, from, INFO_FLAGS)
+      ? rules.ecosystem
+      : undefined
+  }
+  return classifyJsSubcommand(rules, words, from, sub)
+}
+
 function classifyVerb(ecosystem, verbs, words, from) {
-  const sub = findSubcommand(words, from)
-  return sub && verbs.has(sub.value) ? ecosystem : undefined
+  const sub = findSubcommand(words, from, verbs)
+  if (!sub || !verbs.has(sub.value)) {
+    return undefined
+  }
+  return hasFlag(words, sub.index + 1, INFO_FLAGS) ? undefined : ecosystem
 }
 
 function classifyUv(words, from) {
-  const sub = findSubcommand(words, from)
+  const sub = findSubcommand(words, from, UV_INSTALL_VERBS)
   if (!sub) {
     return undefined
   }
@@ -402,25 +340,61 @@ function classifyUv(words, from) {
     return 'uv'
   }
   const nestedVerbs = UV_NESTED_VERBS[sub.value]
-  if (!nestedVerbs) {
-    return undefined
-  }
-  return classifyVerb('uv', nestedVerbs, words, sub.index + 1)
+  return nestedVerbs
+    ? classifyVerb('uv', nestedVerbs, words, sub.index + 1)
+    : undefined
 }
 
-export function classifyInstall(words, index) {
+function classifyRunner(ecosystem, words, from) {
+  const args = positionalArgs(words, from)
+  if (args.length === 0 || hasFlag(words, from, INFO_FLAGS)) {
+    return undefined
+  }
+  return ecosystem
+}
+
+function pythonModule(words, index) {
+  for (let i = index + 1, { length } = words; i < length; i += 1) {
+    const value = words[i].value
+    if (value === '-m' && i + 1 < length) {
+      return { name: words[i + 1].value, from: i + 2 }
+    }
+    if (value.startsWith('-m') && value.length > 2) {
+      return { name: value.slice(2).replace(/^=/, ''), from: i + 1 }
+    }
+    if (!value.startsWith('-')) {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+function classifyPython(words, index) {
+  const module = pythonModule(words, index)
+  if (!module) {
+    return undefined
+  }
+  if (PIP_RE.test(module.name)) {
+    return classifyVerb('pip', PIP_INSTALL_VERBS, words, module.from)
+  }
+  return module.name === 'uv' ? classifyUv(words, module.from) : undefined
+}
+
+export function classifyInstall(words, index, atCommand = true) {
   const base = commandBaseName(words[index].value)
   const from = index + 1
   const jsRules = JS_MANAGERS[base]
   if (jsRules) {
-    return classifyJsManager(base, jsRules, words, from)
+    return classifyJsManager(jsRules, words, from, atCommand)
+  }
+  if (RUNNERS[base]) {
+    return classifyRunner(RUNNERS[base], words, from)
   }
   if (PIP_RE.test(base)) {
     return classifyVerb('pip', PIP_INSTALL_VERBS, words, from)
   }
-  const pipFrom = pipModuleStart(words, index)
-  if (pipFrom !== -1) {
-    return classifyVerb('pip', PIP_INSTALL_VERBS, words, pipFrom)
+  if (PYTHON_RE.test(base)) {
+    return classifyPython(words, index)
   }
   if (base === 'uv') {
     return classifyUv(words, from)
@@ -431,111 +405,210 @@ export function classifyInstall(words, index) {
   return undefined
 }
 
-function commandStartIndex(words) {
-  let i = 0
-  const { length } = words
-  while (i < length) {
+function commandIndex(words) {
+  for (let i = 0, { length } = words; i < length; i += 1) {
     const value = words[i].value
-    if (ENV_ASSIGNMENT_RE.test(value)) {
-      i += 1
-      continue
+    if (!ENV_ASSIGNMENT_RE.test(value) && !KEYWORDS.has(value)) {
+      return i
     }
-    const base = commandBaseName(value)
-    if (PREFIX_COMMANDS.has(base)) {
-      i += 1
-      while (
-        i < length &&
-        (words[i].value.startsWith('-') ||
-          ENV_ASSIGNMENT_RE.test(words[i].value))
-      ) {
-        i += 1
-      }
-      continue
-    }
-    return i
   }
   return -1
 }
 
-function nestedScripts(words, index) {
-  const scripts = []
+function joinWords(words, from) {
+  const parts = []
+  for (let i = from, { length } = words; i < length; i += 1) {
+    parts.push(words[i].value)
+  }
+  return parts.join(' ')
+}
+
+function posixShellScript(words, index) {
+  for (let i = index + 1, { length } = words; i < length - 1; i += 1) {
+    if (/^-[a-z]*c[a-z]*$/i.test(words[i].value)) {
+      return words[i + 1].value
+    }
+  }
+  return undefined
+}
+
+function powershellScript(words, index) {
+  for (let i = index + 1, { length } = words; i < length; i += 1) {
+    const flag = words[i].value.toLowerCase()
+    if (/^-(?:e|ec|enc|encodedcommand)$/.test(flag)) {
+      return { unverifiable: 'an encoded PowerShell command' }
+    }
+    if (/^-(?:c|command)$/.test(flag)) {
+      return { script: joinWords(words, i + 1) }
+    }
+  }
+  return undefined
+}
+
+function envSplitScript(words, index) {
+  for (let i = index + 1, { length } = words; i < length; i += 1) {
+    const value = words[i].value
+    if ((value === '-S' || value === '--split-string') && i + 1 < length) {
+      return joinWords(words, i + 1)
+    }
+    const attached = /^(?:-S|--split-string=)(.+)$/.exec(value)
+    if (attached) {
+      return [attached[1], joinWords(words, i + 1)].join(' ')
+    }
+  }
+  return undefined
+}
+
+function cmdScript(words, index) {
+  for (let i = index + 1, { length } = words; i < length; i += 1) {
+    if (/^\/[ck]$/i.test(words[i].value)) {
+      return joinWords(words, i + 1)
+    }
+  }
+  return undefined
+}
+
+function optionalScript(script) {
+  return { scripts: script === undefined ? [] : [script] }
+}
+
+export function nestedScripts(words, index, heredocs) {
   const base = commandBaseName(words[index].value)
-  if (SHELLS.has(base)) {
-    for (let i = index + 1, { length } = words; i < length - 1; i += 1) {
-      const value = words[i].value
-      if (value === '-c' || (/^-[a-z]*c[a-z]*$/.test(value) && value !== '-')) {
-        scripts.push(words[i + 1].value)
-        break
-      }
-    }
-  } else if (base === 'eval') {
-    const rest = []
-    for (let i = index + 1, { length } = words; i < length; i += 1) {
-      rest.push(words[i].value)
-    }
-    scripts.push(rest.join(' '))
+  if (POSIX_SHELLS.has(base)) {
+    const script = posixShellScript(words, index)
+    return { scripts: script === undefined ? heredocs : [script] }
   }
-  return scripts
+  if (POWERSHELLS.has(base)) {
+    const found = powershellScript(words, index)
+    if (found?.unverifiable) {
+      return { scripts: [], unverifiable: found.unverifiable }
+    }
+    return { scripts: found ? [found.script] : heredocs }
+  }
+  if (base === 'cmd') {
+    return optionalScript(cmdScript(words, index))
+  }
+  if (base === 'eval') {
+    return { scripts: [joinWords(words, index + 1)] }
+  }
+  if (base === 'env') {
+    return optionalScript(envSplitScript(words, index))
+  }
+  return { scripts: [] }
 }
 
-function substitutionScripts(command) {
-  const scripts = []
-  const dollar = /\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g
-  let match = dollar.exec(command)
-  while (match) {
-    scripts.push(match[1])
-    match = dollar.exec(command)
+function textStart(segment) {
+  const { words } = segment
+  let i = 0
+  while (i < words.length - 1 && KEYWORDS.has(words[i].value)) {
+    i += 1
   }
-  const backtick = /`([^`]*)`/g
-  match = backtick.exec(command)
-  while (match) {
-    scripts.push(match[1])
-    match = backtick.exec(command)
-  }
-  return scripts
+  return i === 0 ? segment.start : words[i].start
 }
 
-export function findUnprotectedInstalls(command, depth = 0) {
-  const found = []
-  if (typeof command !== 'string' || !command.trim() || depth > 4) {
-    return found
+function installFinding(command, segment, word, ecosystem) {
+  const start = textStart(segment)
+  const text = command.slice(start, segment.end)
+  const offset = word.start - start
+  return {
+    ecosystem,
+    command: text,
+    suggestion: `${text.slice(0, offset)}sfw ${text.slice(offset)}`,
   }
-  const segments = splitShellSegments(tokenizeShellCommand(command))
+}
+
+function unverifiableFinding(text, reason) {
+  return { ecosystem: 'unknown', command: text, reason, suggestion: '' }
+}
+
+function scanNested(state, words, index, segment) {
+  const before = state.found.length
+  const nested = nestedScripts(words, index, segment.heredocs)
+  if (nested.unverifiable) {
+    const text = state.command.slice(segment.start, segment.end)
+    state.found.push(unverifiableFinding(text, nested.unverifiable))
+  }
+  for (let i = 0, { length } = nested.scripts; i < length; i += 1) {
+    collectInstalls(state, nested.scripts[i], state.depth + 1)
+  }
+  return state.found.length > before
+}
+
+function isCommandPosition(words, index, start) {
+  if (index === start) {
+    return true
+  }
+  const previous = words[index - 1].value
+  return WRAPPERS.has(commandBaseName(previous)) || /^(?:-|\d)/.test(previous)
+}
+
+function scanSegment(state, segment) {
+  const { words } = segment
+  const start = commandIndex(words)
+  if (start === -1 || DATA_COMMANDS.has(commandBaseName(words[start].value))) {
+    return
+  }
+  for (let i = start, { length } = words; i < length; i += 1) {
+    if (commandBaseName(words[i].value) === 'sfw') {
+      return
+    }
+    if (scanNested(state, words, i, segment)) {
+      return
+    }
+    const ecosystem = classifyInstall(
+      words,
+      i,
+      isCommandPosition(words, i, start),
+    )
+    if (ecosystem) {
+      state.found.push(
+        installFinding(state.command, segment, words[i], ecosystem),
+      )
+      return
+    }
+  }
+}
+
+function collectInstalls(parent, command, depth) {
+  if (typeof command !== 'string' || !command.trim()) {
+    return
+  }
+  if (depth > MAX_DEPTH) {
+    parent.found.push(
+      unverifiableFinding(command, 'a command nested too deeply to check'),
+    )
+    return
+  }
+  const { tokens, substitutions } = tokenizeShellCommand(command, {
+    windows: parent.windows,
+  })
+  const state = { ...parent, command, depth }
+  const segments = splitShellSegments(tokens)
   for (let i = 0, { length } = segments; i < length; i += 1) {
-    const words = segments[i]
-    const index = commandStartIndex(words)
-    if (index === -1) {
-      continue
-    }
-    if (commandBaseName(words[index].value) === 'sfw') {
-      continue
-    }
-    const nested = nestedScripts(words, index)
-    for (
-      let j = 0, { length: nestedLength } = nested;
-      j < nestedLength;
-      j += 1
-    ) {
-      found.push(...findUnprotectedInstalls(nested[j], depth + 1))
-    }
-    const ecosystem = classifyInstall(words, index)
-    if (!ecosystem) {
-      continue
-    }
-    const first = words[0]
-    const segmentText = command.slice(first.start, words[words.length - 1].end)
-    const offset = words[index].start - first.start
-    found.push({
-      ecosystem,
-      command: segmentText,
-      suggestion: `${segmentText.slice(0, offset)}sfw ${segmentText.slice(offset)}`,
-    })
+    scanSegment(state, segments[i])
   }
-  const substitutions = substitutionScripts(command)
   for (let i = 0, { length } = substitutions; i < length; i += 1) {
-    found.push(...findUnprotectedInstalls(substitutions[i], depth + 1))
+    collectInstalls(state, substitutions[i], depth + 1)
   }
-  return found
+}
+
+function dedupeFindings(found) {
+  const seen = new Set()
+  return found.filter(finding => {
+    const key = `${finding.ecosystem}\0${finding.suggestion || finding.command}`
+    if (seen.has(key)) {
+      return false
+    }
+    seen.add(key)
+    return true
+  })
+}
+
+export function findUnprotectedInstalls(command, options) {
+  const { platform = process.platform } = { __proto__: null, ...options }
+  const root = { found: [], windows: platform === 'win32' }
+  collectInstalls(root, command, 0)
+  return dedupeFindings(root.found)
 }
 
 export function isSfwOnPath(env) {
@@ -543,41 +616,40 @@ export function isSfwOnPath(env) {
   if (!pathValue) {
     return false
   }
-  const dirs = pathValue.split(path.delimiter)
+  const dirs = pathValue.split(path.delimiter).filter(Boolean)
   const names = ['sfw', 'sfw.cmd', 'sfw.exe']
-  for (let i = 0, { length } = dirs; i < length; i += 1) {
-    if (!dirs[i]) {
-      continue
-    }
-    for (let j = 0, { length: nameLength } = names; j < nameLength; j += 1) {
-      if (existsSync(path.join(dirs[i], names[j]))) {
-        return true
-      }
-    }
+  return dirs.some(dir => names.some(name => existsSync(path.join(dir, name))))
+}
+
+function describeFindings(installs) {
+  const lines = []
+  for (let i = 0, { length } = installs; i < length; i += 1) {
+    const install = installs[i]
+    lines.push(
+      install.suggestion
+        ? `  ${install.suggestion}`
+        : `  (${install.reason}: rewrite it as a plain command with sfw in front of the package manager)`,
+    )
   }
-  return false
+  return lines.join('\n')
 }
 
 export function evaluateInstallCommand(command, options) {
-  const { env = process.env } = { __proto__: null, ...options }
+  const { env = process.env, platform } = { __proto__: null, ...options }
   if (env.SOCKET_INSTALL_GATE === 'off') {
     return { decision: 'allow' }
   }
-  const installs = findUnprotectedInstalls(command)
+  const installs = findUnprotectedInstalls(command, { platform })
   if (installs.length === 0) {
     return { decision: 'allow' }
   }
   const sfwInstalled = isSfwOnPath(env)
-  const lines = []
-  for (let i = 0, { length } = installs; i < length; i += 1) {
-    lines.push(`  ${installs[i].suggestion}`)
-  }
   const setup = sfwInstalled
     ? ''
     : `sfw is not installed yet. Install it first with \`${SFW_INSTALL_COMMAND}\` (no Socket account or API key needed). `
   const agentMessage =
     `Protected by Socket: this command installs packages without Socket Firewall, so it was not run.\n` +
-    `${setup}Run the install through sfw instead:\n${lines.join('\n')}\n` +
+    `${setup}Run the install through sfw instead:\n${describeFindings(installs)}\n` +
     `sfw checks every package against Socket before it downloads and blocks known malware. Docs: ${SFW_DOCS_URL}`
   const userMessage =
     `Protected by Socket: package installs run through Socket Firewall (sfw). ` +
