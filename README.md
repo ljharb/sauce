@@ -9,7 +9,7 @@ Socket Security Skills are definitions for dependency security tasks like vulner
 - **Codex** (OpenAI) - plugin with Socket account sign-in, Agent Skills standard, AGENTS.md fallback
 - **Gemini CLI** (Google DeepMind) - extensions support
 - **OpenCode** - skill directory support
-- **Cursor** - plugin with skills, rules, and the Socket MCP server
+- **Cursor** - plugin with skills, rules, the Socket MCP server, and a hook that runs package installs through Socket Firewall
 - **VS Code Copilot / GitHub Copilot** - via AGENTS.md or Skills CLI
 - **Windsurf** - via Skills CLI
 - **Roo Code** - via Skills CLI
@@ -122,7 +122,8 @@ This repository is a Cursor plugin. It gives Cursor:
 
 - the skills in `skills/`
 - the Socket MCP server at `https://mcp.socket.dev/` (`.cursor-plugin/mcp.json`)
-- a rule that tells the agent when to use the Socket MCP tools (`.cursor-plugin/rules/`)
+- rules that tell the agent when to use the Socket MCP tools, and what to do when an install is blocked (`.cursor-plugin/rules/`)
+- a `beforeShellExecution` hook that blocks npm, pnpm, yarn, pip, uv, and cargo installs that do not run through [Socket Firewall](https://docs.socket.dev/docs/socket-firewall-free) (`.cursor-plugin/hooks.json`)
 
 Install from repository URL (or local checkout) via the Cursor plugin flow.
 
@@ -130,6 +131,17 @@ To connect to Socket, open **Customize** in the Cursor sidebar, find the Socket 
 
 > [!WARNING]
 > Some Cursor versions do not complete the OAuth sign-in for MCP servers that a plugin adds. The Socket tools then keep returning `Unauthorized`. See the [Cursor forum report](https://forum.cursor.com/t/plugin-mcp-oauth-never-reaches-needsauth-authenticate-button-missing-browser-never-opens/170058). If this occurs, use the skills, which sign in through the Socket CLI.
+
+#### Install protection
+
+The hook stops an install such as `npm install lodash` and tells the agent to run `sfw npm install lodash` instead. `sfw` checks each package against Socket before it downloads and blocks known malware. It needs no account or API key. Install it with `npm install -g sfw`. The hook allows that command. The hook is `failClosed`, so if it crashes, Cursor blocks the command. To turn the check off, start Cursor with `SOCKET_INSTALL_GATE=off`.
+
+The plugin hook protects only computers where the plugin is installed. To protect more:
+
+- **A repository and its Cloud Agents:** copy `.cursor-plugin/hooks/socket-install-gate.mjs` to `.cursor/hooks/` in the repository, and register it in `.cursor/hooks.json` with `failClosed: true`. Cloud Agents run project hooks. Also add `sfw` to the `install` command in `.cursor/environment.json`, for example `npm install -g sfw && sfw npm ci`.
+- **A company:** use MDM to put the hook script and a `hooks.json` at Cursor's enterprise path (`/Library/Application Support/Cursor/` on macOS, `/etc/cursor/` on Linux, `C:\ProgramData\Cursor\` on Windows). Hooks added in the team dashboard cannot set `failClosed`.
+
+The `socket-install-protection` rule has the exact files.
 
 For contributors, regenerate manifests with:
 

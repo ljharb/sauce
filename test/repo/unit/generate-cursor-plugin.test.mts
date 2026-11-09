@@ -11,17 +11,30 @@
 
 import { expect, it } from 'vitest'
 
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { safeDeleteSync } from '@socketsecurity/lib-stable/fs/safe'
 
 import {
   buildCursorPluginManifest,
+  buildHooksConfig,
   buildMcpConfig,
+  CURSOR_HOOK_SCRIPT_RELATIVE,
+  CURSOR_HOOK_SOURCE_RELATIVE,
+  CURSOR_HOOKS_RELATIVE,
   CURSOR_LOGO_RELATIVE,
   CURSOR_RULES_RELATIVE,
+  INSTALL_GATE_SOURCE_RELATIVE,
   generateCursorPlugin,
   renderJson,
   SOCKET_MCP_URL,
@@ -41,6 +54,25 @@ const POPULATED_MCP_SERVERS = {
 }
 
 const POPULATED_MCP = renderJson(POPULATED_MCP_SERVERS)
+
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  '..',
+)
+
+function runHook(
+  scriptPath: string,
+  stdin: string,
+): { status: number | null; stdout: string } {
+  const child = spawnSync(process.execPath, [scriptPath], {
+    encoding: 'utf8',
+    env: { PATH: '' },
+    input: stdin,
+  })
+  return { status: child.status, stdout: child.stdout }
+}
 
 function makeFixtureRoot(): string {
   const root = mkdtempSync(path.join(os.tmpdir(), 'cursor-plugin-fixture-'))
@@ -64,6 +96,16 @@ function makeFixtureRoot(): string {
     'utf-8',
   )
   writeFileSync(path.join(root, CURSOR_LOGO_RELATIVE), '<svg/>\n', 'utf-8')
+  const hookSources = [
+    INSTALL_GATE_SOURCE_RELATIVE,
+    CURSOR_HOOK_SOURCE_RELATIVE,
+  ]
+  mkdirSync(path.join(root, path.dirname(INSTALL_GATE_SOURCE_RELATIVE)), {
+    recursive: true,
+  })
+  for (const relative of hookSources) {
+    copyFileSync(path.join(REPO_ROOT, relative), path.join(root, relative))
+  }
   return root
 }
 
@@ -142,6 +184,8 @@ it('check mode reports stale artifacts without writing anything', () => {
     const result = generateCursorPlugin(root, { check: true })
 
     expect(result.outdated.toSorted()).toStrictEqual([
+      path.join('.cursor-plugin', 'hooks.json'),
+      path.join('.cursor-plugin', 'hooks', 'socket-install-gate.mjs'),
       path.join('.cursor-plugin', 'mcp.json'),
       path.join('.cursor-plugin', 'plugin.json'),
     ])
@@ -162,4 +206,70 @@ it('generate is idempotent: second check run reports up to date', () => {
   } finally {
     safeDeleteSync(root)
   }
+})
+
+it('manifest points at the generated hooks config', () => {
+  const root = makeFixtureRoot()
+  try {
+    expect(buildCursorPluginManifest({ root })['hooks']).toBe(
+      CURSOR_HOOKS_RELATIVE,
+    )
+  } finally {
+    safeDeleteSync(root)
+  }
+})
+
+it('hooks config runs the bundled script before shell commands, fail-closed', () => {
+  expect(buildHooksConfig()).toStrictEqual({
+    version: 1,
+    hooks: {
+      beforeShellExecution: [
+        {
+          command: `node "\${CURSOR_PLUGIN_ROOT}/${CURSOR_HOOK_SCRIPT_RELATIVE}"`,
+          failClosed: true,
+          timeout: 10,
+        },
+      ],
+    },
+  })
+})
+
+it('bundled hook script is self-contained and answers Cursor', () => {
+  const root = makeFixtureRoot()
+  try {
+    const result = generateCursorPlugin(root, { check: false })
+    const script = readFileSync(result.hookScriptPath, 'utf8')
+    expect(script).not.toMatch(/from '\.{1,2}\//)
+
+    const isolated = mkdtempSync(path.join(os.tmpdir(), 'cursor-hook-'))
+    const copied = path.join(isolated, 'socket-install-gate.mjs')
+    copyFileSync(result.hookScriptPath, copied)
+    try {
+      const denied = runHook(
+        copied,
+        JSON.stringify({ command: 'npm install lodash', cwd: isolated }),
+      )
+      expect(denied.status).toBe(0)
+      const deniedResponse = JSON.parse(denied.stdout)
+      expect(deniedResponse.permission).toBe('deny')
+      expect(deniedResponse.agent_message).toContain('sfw npm install lodash')
+      expect(deniedResponse.user_message).toContain('Protected by Socket')
+
+      const allowed = runHook(copied, JSON.stringify({ command: 'ls -la' }))
+      expect(allowed.status).toBe(0)
+      expect(JSON.parse(allowed.stdout)).toStrictEqual({ permission: 'allow' })
+
+      const broken = runHook(copied, 'not json')
+      expect(broken.status).not.toBe(0)
+    } finally {
+      safeDeleteSync(isolated)
+    }
+  } finally {
+    safeDeleteSync(root)
+  }
+})
+
+it('checked-in hook artifacts match the generator', () => {
+  const result = generateCursorPlugin(REPO_ROOT, { check: true })
+  expect(result.outdated).toStrictEqual([])
 })

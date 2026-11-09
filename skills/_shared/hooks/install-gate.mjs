@@ -1,0 +1,593 @@
+/**
+ * @file Decide whether an agent's shell command installs packages without
+ *   Socket Firewall. Agent hooks (Cursor, Claude Code, Codex) call
+ *   evaluateInstallCommand and map the result onto their own hook output.
+ *   Dependency-free: it runs from an installed plugin with only Node.
+ */
+
+import { existsSync } from 'node:fs'
+import path from 'node:path'
+import process from 'node:process'
+
+export const SOCKET_SIGN_UP_URL = 'https://socket.dev/'
+export const SFW_DOCS_URL = 'https://docs.socket.dev/docs/socket-firewall-free'
+export const SFW_INSTALL_COMMAND = 'npm install -g sfw'
+
+const OPERATORS = ['&&', '||', ';;', '|&', ';', '|', '&', '\n']
+
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
+
+const PREFIX_COMMANDS = new Set([
+  'builtin',
+  'command',
+  'env',
+  'exec',
+  'nice',
+  'nohup',
+  'sudo',
+  'time',
+])
+
+const SHELLS = new Set(['bash', 'dash', 'ksh', 'sh', 'zsh'])
+
+const NPM_INSTALL_VERBS = new Set([
+  'add',
+  'ci',
+  'clean-install',
+  'exec',
+  'i',
+  'ic',
+  'in',
+  'ins',
+  'inst',
+  'insta',
+  'instal',
+  'install',
+  'install-ci-test',
+  'install-clean',
+  'install-test',
+  'isnt',
+  'isnta',
+  'isntal',
+  'isntall',
+  'isntall-clean',
+  'it',
+  'cit',
+  'udpate',
+  'up',
+  'update',
+  'upgrade',
+  'x',
+])
+
+const PNPM_INSTALL_VERBS = new Set([
+  'add',
+  'dlx',
+  'i',
+  'install',
+  'up',
+  'update',
+  'upgrade',
+])
+
+const YARN_INSTALL_VERBS = new Set(['add', 'dlx', 'install', 'up', 'upgrade'])
+
+const PIP_INSTALL_VERBS = new Set(['download', 'install'])
+
+const UV_INSTALL_VERBS = new Set(['add', 'sync'])
+
+const CARGO_INSTALL_VERBS = new Set(['add', 'fetch', 'install'])
+
+const VALUE_FLAGS = new Set([
+  '--cwd',
+  '--dir',
+  '--filter',
+  '--prefix',
+  '--workspace',
+  '--workspace-dir',
+  '-C',
+  '-F',
+  '-w',
+])
+
+const GLOBAL_FLAGS = new Set(['--global', '-g'])
+
+const INFO_FLAGS = new Set(['--help', '--version', '-h', '-v'])
+
+const JS_MANAGERS = {
+  __proto__: null,
+  npm: {
+    bareInstalls: false,
+    createVerbs: new Set(['create', 'init']),
+    globalAdd: false,
+    verbs: NPM_INSTALL_VERBS,
+  },
+  pnpm: {
+    bareInstalls: false,
+    createVerbs: new Set(['create']),
+    globalAdd: false,
+    verbs: PNPM_INSTALL_VERBS,
+  },
+  yarn: {
+    bareInstalls: true,
+    createVerbs: new Set(['create']),
+    globalAdd: true,
+    verbs: YARN_INSTALL_VERBS,
+  },
+}
+
+const UV_NESTED_VERBS = {
+  __proto__: null,
+  pip: new Set(['install', 'sync']),
+  tool: new Set(['install']),
+}
+
+const PIP_RE = /^pip(?:\d+(?:\.\d+)?)?$/
+
+const PYTHON_RE = /^(?:py|python(?:\d+(?:\.\d+)?)?)$/
+
+const PIP_MODULES = new Set(['pip', 'pip3'])
+
+const GROUPING_CHARS = new Set(['(', ')', '{', '}'])
+
+const WHITESPACE_CHARS = new Set([' ', '\t', '\r'])
+
+function startWord(state, index) {
+  if (state.start === -1) {
+    state.start = index
+  }
+}
+
+function flushWord(state, end) {
+  if (state.start !== -1) {
+    state.tokens.push({
+      type: 'word',
+      value: state.current,
+      start: state.start,
+      end,
+    })
+  }
+  state.current = ''
+  state.start = -1
+}
+
+function matchOperator(command, index) {
+  for (let i = 0, { length } = OPERATORS; i < length; i += 1) {
+    if (command.startsWith(OPERATORS[i], index)) {
+      return OPERATORS[i]
+    }
+  }
+  return ''
+}
+
+function stepQuoted(state, index) {
+  const { command } = state
+  const char = command[index]
+  if (char === state.quote) {
+    state.quote = ''
+    return index + 1
+  }
+  if (char === '\\' && state.quote === '"' && index + 1 < command.length) {
+    state.current += command[index + 1]
+    return index + 2
+  }
+  state.current += char
+  return index + 1
+}
+
+function stepEscape(state, index) {
+  const next = state.command[index + 1]
+  if (next === '\n') {
+    return index + 2
+  }
+  startWord(state, index)
+  state.current += next
+  return index + 2
+}
+
+function skipComment(command, index) {
+  const newline = command.indexOf('\n', index)
+  return newline === -1 ? command.length : newline
+}
+
+function stepTokenizer(state, index) {
+  const { command } = state
+  const char = command[index]
+  if (state.quote) {
+    return stepQuoted(state, index)
+  }
+  if (char === "'" || char === '"') {
+    startWord(state, index)
+    state.quote = char
+    return index + 1
+  }
+  if (char === '\\' && index + 1 < command.length) {
+    return stepEscape(state, index)
+  }
+  const operator = matchOperator(command, index)
+  if (operator) {
+    flushWord(state, index)
+    state.tokens.push({ type: 'operator', value: operator, start: index })
+    return index + operator.length
+  }
+  if (state.start === -1 && GROUPING_CHARS.has(char)) {
+    state.tokens.push({ type: 'operator', value: char, start: index })
+    return index + 1
+  }
+  if (WHITESPACE_CHARS.has(char)) {
+    flushWord(state, index)
+    return index + 1
+  }
+  if (char === '#' && state.start === -1) {
+    return skipComment(command, index)
+  }
+  startWord(state, index)
+  state.current += char
+  return index + 1
+}
+
+export function tokenizeShellCommand(command) {
+  const state = {
+    command,
+    current: '',
+    quote: '',
+    start: -1,
+    tokens: [],
+  }
+  const { length } = command
+  let index = 0
+  while (index < length) {
+    index = stepTokenizer(state, index)
+  }
+  flushWord(state, length)
+  return state.tokens
+}
+
+export function splitShellSegments(tokens) {
+  const segments = []
+  let words = []
+  for (let i = 0, { length } = tokens; i < length; i += 1) {
+    const token = tokens[i]
+    if (token.type === 'operator') {
+      if (words.length) {
+        segments.push(words)
+      }
+      words = []
+      continue
+    }
+    words.push(token)
+  }
+  if (words.length) {
+    segments.push(words)
+  }
+  return segments
+}
+
+export function commandBaseName(word) {
+  const base = path.posix.basename(word.replaceAll('\\', '/'))
+  return base.replace(/\.(?:cmd|exe|ps1)$/i, '').toLowerCase()
+}
+
+function findSubcommand(words, from) {
+  for (let i = from, { length } = words; i < length; i += 1) {
+    const value = words[i].value
+    if (value.startsWith('-')) {
+      if (VALUE_FLAGS.has(value)) {
+        i += 1
+      }
+      continue
+    }
+    return { index: i, value }
+  }
+  return undefined
+}
+
+function positionalArgs(words, from) {
+  const args = []
+  for (let i = from, { length } = words; i < length; i += 1) {
+    const value = words[i].value
+    if (value.startsWith('-')) {
+      if (VALUE_FLAGS.has(value)) {
+        i += 1
+      }
+      continue
+    }
+    args.push(value)
+  }
+  return args
+}
+
+function hasGlobalFlag(words, from) {
+  for (let i = from, { length } = words; i < length; i += 1) {
+    if (GLOBAL_FLAGS.has(words[i].value)) {
+      return true
+    }
+  }
+  return false
+}
+
+export function isSfwSelfInstall(words, from) {
+  const sub = findSubcommand(words, from)
+  if (!sub) {
+    return false
+  }
+  let argsFrom = sub.index + 1
+  if (sub.value === 'global') {
+    const next = findSubcommand(words, argsFrom)
+    if (!next) {
+      return false
+    }
+    argsFrom = next.index + 1
+  } else if (!hasGlobalFlag(words, from)) {
+    return false
+  }
+  const args = positionalArgs(words, argsFrom)
+  if (args.length === 0) {
+    return false
+  }
+  for (let i = 0, { length } = args; i < length; i += 1) {
+    if (!/^sfw(?:@[\w.^~<>=*-]+)?$/.test(args[i])) {
+      return false
+    }
+  }
+  return true
+}
+
+function pipModuleStart(words, index) {
+  const base = commandBaseName(words[index].value)
+  if (!PYTHON_RE.test(base)) {
+    return -1
+  }
+  for (let i = index + 1, { length } = words; i < length - 1; i += 1) {
+    const value = words[i].value
+    if (value === '-m') {
+      return PIP_MODULES.has(words[i + 1].value) ? i + 2 : -1
+    }
+    if (!value.startsWith('-')) {
+      return -1
+    }
+  }
+  return -1
+}
+
+function hasInfoFlag(words, from) {
+  for (let i = from, { length } = words; i < length; i += 1) {
+    if (INFO_FLAGS.has(words[i].value)) {
+      return true
+    }
+  }
+  return false
+}
+
+function isGlobalAdd(words, sub) {
+  const next = findSubcommand(words, sub.index + 1)
+  return next?.value === 'add'
+}
+
+function classifyJsManager(ecosystem, rules, words, from) {
+  const sub = findSubcommand(words, from)
+  if (!sub) {
+    return rules.bareInstalls && !hasInfoFlag(words, from)
+      ? ecosystem
+      : undefined
+  }
+  if (rules.verbs.has(sub.value)) {
+    return isSfwSelfInstall(words, from) ? undefined : ecosystem
+  }
+  if (rules.globalAdd && sub.value === 'global') {
+    return isGlobalAdd(words, sub) && !isSfwSelfInstall(words, from)
+      ? ecosystem
+      : undefined
+  }
+  if (
+    rules.createVerbs.has(sub.value) &&
+    positionalArgs(words, sub.index + 1).length
+  ) {
+    return ecosystem
+  }
+  return undefined
+}
+
+function classifyVerb(ecosystem, verbs, words, from) {
+  const sub = findSubcommand(words, from)
+  return sub && verbs.has(sub.value) ? ecosystem : undefined
+}
+
+function classifyUv(words, from) {
+  const sub = findSubcommand(words, from)
+  if (!sub) {
+    return undefined
+  }
+  if (UV_INSTALL_VERBS.has(sub.value)) {
+    return 'uv'
+  }
+  const nestedVerbs = UV_NESTED_VERBS[sub.value]
+  if (!nestedVerbs) {
+    return undefined
+  }
+  return classifyVerb('uv', nestedVerbs, words, sub.index + 1)
+}
+
+export function classifyInstall(words, index) {
+  const base = commandBaseName(words[index].value)
+  const from = index + 1
+  const jsRules = JS_MANAGERS[base]
+  if (jsRules) {
+    return classifyJsManager(base, jsRules, words, from)
+  }
+  if (PIP_RE.test(base)) {
+    return classifyVerb('pip', PIP_INSTALL_VERBS, words, from)
+  }
+  const pipFrom = pipModuleStart(words, index)
+  if (pipFrom !== -1) {
+    return classifyVerb('pip', PIP_INSTALL_VERBS, words, pipFrom)
+  }
+  if (base === 'uv') {
+    return classifyUv(words, from)
+  }
+  if (base === 'cargo') {
+    return classifyVerb('cargo', CARGO_INSTALL_VERBS, words, from)
+  }
+  return undefined
+}
+
+function commandStartIndex(words) {
+  let i = 0
+  const { length } = words
+  while (i < length) {
+    const value = words[i].value
+    if (ENV_ASSIGNMENT_RE.test(value)) {
+      i += 1
+      continue
+    }
+    const base = commandBaseName(value)
+    if (PREFIX_COMMANDS.has(base)) {
+      i += 1
+      while (
+        i < length &&
+        (words[i].value.startsWith('-') ||
+          ENV_ASSIGNMENT_RE.test(words[i].value))
+      ) {
+        i += 1
+      }
+      continue
+    }
+    return i
+  }
+  return -1
+}
+
+function nestedScripts(words, index) {
+  const scripts = []
+  const base = commandBaseName(words[index].value)
+  if (SHELLS.has(base)) {
+    for (let i = index + 1, { length } = words; i < length - 1; i += 1) {
+      const value = words[i].value
+      if (value === '-c' || (/^-[a-z]*c[a-z]*$/.test(value) && value !== '-')) {
+        scripts.push(words[i + 1].value)
+        break
+      }
+    }
+  } else if (base === 'eval') {
+    const rest = []
+    for (let i = index + 1, { length } = words; i < length; i += 1) {
+      rest.push(words[i].value)
+    }
+    scripts.push(rest.join(' '))
+  }
+  return scripts
+}
+
+function substitutionScripts(command) {
+  const scripts = []
+  const dollar = /\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g
+  let match = dollar.exec(command)
+  while (match) {
+    scripts.push(match[1])
+    match = dollar.exec(command)
+  }
+  const backtick = /`([^`]*)`/g
+  match = backtick.exec(command)
+  while (match) {
+    scripts.push(match[1])
+    match = backtick.exec(command)
+  }
+  return scripts
+}
+
+export function findUnprotectedInstalls(command, depth = 0) {
+  const found = []
+  if (typeof command !== 'string' || !command.trim() || depth > 4) {
+    return found
+  }
+  const segments = splitShellSegments(tokenizeShellCommand(command))
+  for (let i = 0, { length } = segments; i < length; i += 1) {
+    const words = segments[i]
+    const index = commandStartIndex(words)
+    if (index === -1) {
+      continue
+    }
+    if (commandBaseName(words[index].value) === 'sfw') {
+      continue
+    }
+    const nested = nestedScripts(words, index)
+    for (
+      let j = 0, { length: nestedLength } = nested;
+      j < nestedLength;
+      j += 1
+    ) {
+      found.push(...findUnprotectedInstalls(nested[j], depth + 1))
+    }
+    const ecosystem = classifyInstall(words, index)
+    if (!ecosystem) {
+      continue
+    }
+    const first = words[0]
+    const segmentText = command.slice(first.start, words[words.length - 1].end)
+    const offset = words[index].start - first.start
+    found.push({
+      ecosystem,
+      command: segmentText,
+      suggestion: `${segmentText.slice(0, offset)}sfw ${segmentText.slice(offset)}`,
+    })
+  }
+  const substitutions = substitutionScripts(command)
+  for (let i = 0, { length } = substitutions; i < length; i += 1) {
+    found.push(...findUnprotectedInstalls(substitutions[i], depth + 1))
+  }
+  return found
+}
+
+export function isSfwOnPath(env) {
+  const pathValue = env?.PATH ?? env?.Path ?? ''
+  if (!pathValue) {
+    return false
+  }
+  const dirs = pathValue.split(path.delimiter)
+  const names = ['sfw', 'sfw.cmd', 'sfw.exe']
+  for (let i = 0, { length } = dirs; i < length; i += 1) {
+    if (!dirs[i]) {
+      continue
+    }
+    for (let j = 0, { length: nameLength } = names; j < nameLength; j += 1) {
+      if (existsSync(path.join(dirs[i], names[j]))) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+export function evaluateInstallCommand(command, options) {
+  const { env = process.env } = { __proto__: null, ...options }
+  if (env.SOCKET_INSTALL_GATE === 'off') {
+    return { decision: 'allow' }
+  }
+  const installs = findUnprotectedInstalls(command)
+  if (installs.length === 0) {
+    return { decision: 'allow' }
+  }
+  const sfwInstalled = isSfwOnPath(env)
+  const lines = []
+  for (let i = 0, { length } = installs; i < length; i += 1) {
+    lines.push(`  ${installs[i].suggestion}`)
+  }
+  const setup = sfwInstalled
+    ? ''
+    : `sfw is not installed yet. Install it first with \`${SFW_INSTALL_COMMAND}\` (no Socket account or API key needed). `
+  const agentMessage =
+    `Protected by Socket: this command installs packages without Socket Firewall, so it was not run.\n` +
+    `${setup}Run the install through sfw instead:\n${lines.join('\n')}\n` +
+    `sfw checks every package against Socket before it downloads and blocks known malware. Docs: ${SFW_DOCS_URL}`
+  const userMessage =
+    `Protected by Socket: package installs run through Socket Firewall (sfw). ` +
+    `${sfwInstalled ? '' : `Install it with \`${SFW_INSTALL_COMMAND}\`. `}` +
+    `Manage protection with a Socket account: ${SOCKET_SIGN_UP_URL}`
+  return {
+    decision: 'deny',
+    installs,
+    sfwInstalled,
+    agentMessage,
+    userMessage,
+  }
+}

@@ -30,6 +30,8 @@ const GENERATED_FILES = [
   'README.md',
   '.cursor-plugin/plugin.json',
   '.cursor-plugin/mcp.json',
+  '.cursor-plugin/hooks.json',
+  '.cursor-plugin/hooks/socket-install-gate.mjs',
   '.claude-plugin/plugin.json',
   '.claude-plugin/marketplace.json',
   '.agents/plugins/marketplace.json',
