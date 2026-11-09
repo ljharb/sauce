@@ -134,7 +134,7 @@ To connect to Socket, open **Customize** in the Cursor sidebar, find the Socket 
 
 #### Install protection
 
-The hook stops an install such as `npm install lodash` and tells the agent to run `sfw npm install lodash` instead. `sfw` checks each package against Socket before it downloads and blocks known malware. It needs no account or API key. Install it with `npm install -g sfw`. The hook allows that command. The hook runs with `node`. If it gets input it cannot read, it blocks the command. If `node` is missing, Cursor runs the command without the check. To turn the check off, start Cursor with `SOCKET_INSTALL_GATE=off`.
+The hook stops an install such as `npm install lodash` and tells the agent to run `sfw npm install lodash` instead. `sfw` checks each package against Socket before it downloads and blocks known malware. It needs no account or API key. Install it with `npm install -g sfw`. The hook allows that command. `npx` is allowed for binaries already in `node_modules/.bin`. Installs inside containers are not checked. The hook runs with `node`. If it gets input it cannot read, it blocks the command. If `node` is missing, Cursor runs the command without the check. To turn the check off, start Cursor with `SOCKET_INSTALL_GATE=off`.
 
 The plugin hook protects only computers where the plugin is installed. To protect more:
 

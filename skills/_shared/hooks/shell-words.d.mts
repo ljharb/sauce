@@ -10,6 +10,7 @@ export interface ShellSegment {
   heredocs: string[]
   start: number
   end: number
+  after: string
 }
 
 export interface TokenizeShellCommandOptions {

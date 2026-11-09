@@ -11,9 +11,17 @@ import { fileURLToPath } from 'node:url'
 import { evaluateInstallCommand } from './install-gate.mjs'
 
 export function buildCursorHookResponse(input, env) {
-  const command = input && typeof input === 'object' ? input.command : ''
-  const result = evaluateInstallCommand(command, {
-    cwd: input?.cwd,
+  if (
+    !input ||
+    typeof input !== 'object' ||
+    typeof input.command !== 'string'
+  ) {
+    return buildCursorHookFailure(
+      new TypeError('hook input has no string "command" field'),
+    )
+  }
+  const result = evaluateInstallCommand(input.command, {
+    cwd: typeof input.cwd === 'string' ? input.cwd : undefined,
     env,
   })
   if (result.decision === 'allow') {

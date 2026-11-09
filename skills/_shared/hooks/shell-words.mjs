@@ -1,20 +1,26 @@
 /**
  * @file Split a shell command line into segments of words. Tracks quotes,
  *   command substitutions, redirections, and heredocs so callers can tell
- *   which words are commands and which are data.
+ *   which words are commands and which are data. In Windows mode a backslash
+ *   is literal and a backtick escapes the next character, as in PowerShell.
  */
 
-const OPERATORS = ['&&', '||', ';;', ';&', '|&', ';', '|', '&', '\n', '(', ')']
+const OPERATORS = ['&&', '||', ';;', ';&', '|&', ';', '|', '&', '(', ')']
 
 const REDIRECT_RE = /^(?:&>>|&>|\d*(?:<<-|<<<|<<|>>|>&|<&|>\||<>|>|<))/
 
+const HEREDOC_RE = /^\d*<<-?$/
+
 const WHITESPACE_CHARS = new Set([' ', '\t', '\r'])
 
-const BRACE_CHARS = new Set(['{', '}'])
+const BRACE_END_CHARS = new Set([' ', '\t', '\r', '\n', ';', '&', '|', ')'])
+
+const BRACE_AFTER_OPERATORS = new Set([';', '\n', '&', '&&', '||', '|'])
 
 export function createShellState(command, options) {
   const { windows = false } = { __proto__: null, ...options }
   return {
+    attachFrom: 0,
     command,
     current: '',
     heredocs: [],
@@ -63,8 +69,27 @@ function skipQuoted(command, index, quote) {
   return i + 1
 }
 
+function isWordAt(command, index, word) {
+  return (
+    command.startsWith(word, index) &&
+    !/[\w-]/.test(command[index - 1] ?? ' ') &&
+    !/[\w-]/.test(command[index + word.length] ?? ' ')
+  )
+}
+
+function stepParen(char, depth, caseDepth) {
+  if (char === '(') {
+    return depth + 1
+  }
+  if (char === ')' && caseDepth === 0) {
+    return depth - 1
+  }
+  return depth
+}
+
 export function findClosingParen(command, index) {
   let depth = 1
+  let caseDepth = 0
   let i = index
   const { length } = command
   while (i < length) {
@@ -77,13 +102,14 @@ export function findClosingParen(command, index) {
       i += 2
       continue
     }
-    if (char === '(') {
-      depth += 1
-    } else if (char === ')') {
-      depth -= 1
-      if (depth === 0) {
-        return i
-      }
+    if (isWordAt(command, i, 'case')) {
+      caseDepth += 1
+    } else if (caseDepth && isWordAt(command, i, 'esac')) {
+      caseDepth -= 1
+    }
+    depth = stepParen(char, depth, caseDepth)
+    if (depth === 0) {
+      return i
     }
     i += 1
   }
@@ -114,15 +140,32 @@ function readBacktick(state, index) {
   return end
 }
 
+function readAnsiCString(state, index) {
+  const { command } = state
+  let close = index + 2
+  const { length } = command
+  while (close < length && command[close] !== "'") {
+    close += command[close] === '\\' ? 2 : 1
+  }
+  const end = Math.min(close + 1, length)
+  startWord(state, index)
+  state.current += command.slice(index + 2, Math.min(close, length))
+  return end
+}
+
 function readSubstitution(state, index) {
   const { command } = state
   if (command[index] === '$' && command[index + 1] === '(') {
     return readDollarParen(state, index)
   }
-  if (command[index] === '`') {
+  if (command[index] === '`' && !state.windows) {
     return readBacktick(state, index)
   }
   return -1
+}
+
+function escapeChar(state) {
+  return state.windows ? '`' : '\\'
 }
 
 function stepQuoted(state, index) {
@@ -137,7 +180,7 @@ function stepQuoted(state, index) {
     if (next !== -1) {
       return next
     }
-    if (char === '\\' && !state.windows && index + 1 < command.length) {
+    if (char === escapeChar(state) && index + 1 < command.length) {
       state.current += command[index + 1]
       return index + 2
     }
@@ -156,36 +199,35 @@ function stepEscape(state, index) {
   return index + 2
 }
 
-function readHeredocBodies(state, index) {
-  const { command } = state
-  let cursor = index + 1
-  const pending = state.heredocs.filter(heredoc => heredoc.body === undefined)
-  for (let i = 0, { length } = pending; i < length; i += 1) {
-    const heredoc = pending[i]
-    const lines = []
-    while (cursor < command.length) {
-      const newline = command.indexOf('\n', cursor)
-      const lineEnd = newline === -1 ? command.length : newline
-      const line = command.slice(cursor, lineEnd)
-      cursor = lineEnd + 1
-      const compare = heredoc.stripTabs ? line.replace(/^\t+/, '') : line
-      if (compare === heredoc.delimiter) {
-        break
-      }
-      lines.push(line)
+function readHeredocBody(command, cursor, heredoc) {
+  const lines = []
+  let next = cursor
+  while (next < command.length) {
+    const newline = command.indexOf('\n', next)
+    const lineEnd = newline === -1 ? command.length : newline
+    const line = command.slice(next, lineEnd)
+    next = lineEnd + 1
+    const compare = heredoc.stripTabs ? line.replace(/^\t+/, '') : line
+    if (compare === heredoc.delimiter) {
+      break
     }
-    heredoc.body = lines.join('\n')
+    lines.push(line)
   }
-  return cursor
+  heredoc.body = lines.join('\n')
+  return next
 }
 
 function stepNewline(state, index) {
   flushWord(state, index)
+  attachHeredocDelimiters(state)
   state.tokens.push({ type: 'operator', value: '\n', start: index })
-  if (state.heredocs.some(heredoc => heredoc.body === undefined)) {
-    return readHeredocBodies(state, index)
+  let cursor = index + 1
+  for (let i = 0, { length } = state.heredocs; i < length; i += 1) {
+    if (state.heredocs[i].body === undefined) {
+      cursor = readHeredocBody(state.command, cursor, state.heredocs[i])
+    }
   }
-  return index + 1
+  return cursor
 }
 
 function stepRedirect(state, index, redirect) {
@@ -201,27 +243,45 @@ function stepUnquoted(state, index) {
   if (substitution !== -1) {
     return substitution
   }
+  if (char === '$' && command[index + 1] === "'") {
+    return readAnsiCString(state, index)
+  }
   if (char === "'" || char === '"') {
     startWord(state, index)
     state.quote = char
     return index + 1
   }
-  if (char === '\\' && !state.windows && index + 1 < command.length) {
+  if (char === escapeChar(state) && index + 1 < command.length) {
     return stepEscape(state, index)
   }
   return -1
 }
 
-function stepStructure(state, index) {
+function isBraceOperator(state, index) {
   const { command } = state
   const char = command[index]
-  const redirectSource =
-    state.start === -1 ? command.slice(index) : command.slice(index, index + 3)
-  const redirect = REDIRECT_RE.exec(redirectSource)
+  if (state.start !== -1 || (char !== '{' && char !== '}')) {
+    return false
+  }
+  const next = command[index + 1]
+  if (char === '{') {
+    return next === undefined || WHITESPACE_CHARS.has(next) || next === '\n'
+  }
+  const previous = state.tokens.at(-1)
+  return (
+    (next === undefined || BRACE_END_CHARS.has(next)) &&
+    previous?.type === 'operator' &&
+    BRACE_AFTER_OPERATORS.has(previous.value)
+  )
+}
+
+function stepStructure(state, index) {
+  const { command } = state
+  const redirect = REDIRECT_RE.exec(command.slice(index, index + 8))
   if (redirect && (state.start === -1 || !/^\d/.test(redirect[0]))) {
     return stepRedirect(state, index, redirect[0])
   }
-  if (char === '\n') {
+  if (command[index] === '\n') {
     return stepNewline(state, index)
   }
   const operator = matchOperator(command, index)
@@ -230,8 +290,8 @@ function stepStructure(state, index) {
     state.tokens.push({ type: 'operator', value: operator, start: index })
     return index + operator.length
   }
-  if (state.start === -1 && BRACE_CHARS.has(char)) {
-    state.tokens.push({ type: 'operator', value: char, start: index })
+  if (isBraceOperator(state, index)) {
+    state.tokens.push({ type: 'operator', value: command[index], start: index })
     return index + 1
   }
   return -1
@@ -266,14 +326,14 @@ function stepTokenizer(state, index) {
 
 function attachHeredocDelimiters(state) {
   const { tokens } = state
-  for (let i = 0, { length } = tokens; i < length - 1; i += 1) {
+  const { length } = tokens
+  for (let i = state.attachFrom; i < length - 1; i += 1) {
     const token = tokens[i]
     const target = tokens[i + 1]
     if (
       token.type === 'redirect' &&
-      /<<-?$/.test(token.value) &&
-      target.type === 'word' &&
-      !token.heredoc
+      HEREDOC_RE.test(token.value) &&
+      target.type === 'word'
     ) {
       token.heredoc = {
         delimiter: target.value,
@@ -283,6 +343,7 @@ function attachHeredocDelimiters(state) {
       state.heredocs.push(token.heredoc)
     }
   }
+  state.attachFrom = Math.max(state.attachFrom, length - 1)
 }
 
 export function tokenizeShellCommand(command, options) {
@@ -290,10 +351,6 @@ export function tokenizeShellCommand(command, options) {
   const { length } = command
   let index = 0
   while (index < length) {
-    if (!state.quote && command[index] === '\n') {
-      flushWord(state, index)
-      attachHeredocDelimiters(state)
-    }
     index = stepTokenizer(state, index)
   }
   flushWord(state, length)
@@ -304,8 +361,8 @@ export function tokenizeShellCommand(command, options) {
   }
 }
 
-function newSegment() {
-  return { words: [], heredocs: [], start: -1, end: -1 }
+function newSegment(operator) {
+  return { words: [], heredocs: [], start: -1, end: -1, after: operator }
 }
 
 function extendSegment(segment, token) {
@@ -337,14 +394,14 @@ function addRedirect(segment, token, target) {
 
 export function splitShellSegments(tokens) {
   const segments = []
-  let segment = newSegment()
+  let segment = newSegment('')
   for (let i = 0, { length } = tokens; i < length; i += 1) {
     const token = tokens[i]
     if (token.type === 'operator') {
       if (segment.start !== -1) {
         segments.push(segment)
       }
-      segment = newSegment()
+      segment = newSegment(token.value)
       continue
     }
     extendSegment(segment, token)

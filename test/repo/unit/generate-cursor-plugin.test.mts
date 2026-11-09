@@ -220,7 +220,7 @@ it('hooks config runs the bundled script before shell commands', () => {
     hooks: {
       beforeShellExecution: [
         {
-          command: `node "\${CURSOR_PLUGIN_ROOT}/${CURSOR_HOOK_SCRIPT_RELATIVE}"`,
+          command: `node ${CURSOR_HOOK_SCRIPT_RELATIVE}`,
           timeout: 10,
         },
       ],
@@ -274,6 +274,22 @@ it('bundling rejects an import it cannot inline', () => {
     )
     expect(() => generateCursorPlugin(root, { check: false })).toThrow(
       HOOK_SOURCES_RELATIVE[0],
+    )
+  } finally {
+    safeDeleteSync(root)
+  }
+})
+
+it('bundling rejects two sources that declare the same name', () => {
+  const root = makeFixtureRoot()
+  try {
+    const source = path.join(root, HOOK_SOURCES_RELATIVE[1])
+    writeFileSync(
+      source,
+      `${readFileSync(source, 'utf8')}\nfunction startWord() {}\n`,
+    )
+    expect(() => generateCursorPlugin(root, { check: false })).toThrow(
+      'startWord',
     )
   } finally {
     safeDeleteSync(root)

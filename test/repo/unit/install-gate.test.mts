@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -129,6 +129,13 @@ describe('findUnprotectedInstalls: shell structure', () => {
     ['env -u NODE_OPTIONS npm ci', 'env -u NODE_OPTIONS sfw npm ci'],
     ['corepack pnpm install', 'corepack sfw pnpm install'],
     ['xargs npm install < list', 'xargs sfw npm install < list'],
+    ['env CI=1 yarn', 'env CI=1 sfw yarn'],
+    ['sudo -u node yarn', 'sudo -u node sfw yarn'],
+    ['cross-env CI=true yarn', 'cross-env CI=true sfw yarn'],
+    ['volta run yarn', 'volta run sfw yarn'],
+    ['time -p npm i', 'time -p sfw npm i'],
+    ['env SFW_HOME=/opt/sfw npm i', 'env SFW_HOME=/opt/sfw sfw npm i'],
+    ['sudo -u sfw npm install x', 'sudo -u sfw sfw npm install x'],
   ])('keeps wrappers ahead of sfw: %s', (command, suggestion) => {
     expect(suggestions(command)).toEqual([suggestion])
   })
@@ -147,12 +154,39 @@ describe('findUnprotectedInstalls: shell structure', () => {
     ['echo `pnpm add vite`', 'sfw pnpm add vite'],
     ['bash <<EOF\nnpm i\nEOF', 'sfw npm i'],
     ['bash <<< "npm i x"', 'sfw npm i x'],
+    ['cat <<EOF | sh\nnpm i lodash\nEOF', 'sfw npm i lodash'],
+    ['echo "npm i x" | bash', 'sfw npm i x'],
+    ['git submodule foreach npm ci', 'sfw npm ci'],
+    ["git rebase -x 'npm ci' main", 'sfw npm ci'],
+    ['git bisect run npm ci', 'sfw npm ci'],
+    ['gh codespace ssh -- npm i', 'sfw npm i'],
+    ["su - node -c 'npm install'", 'sfw npm install'],
+    ["flock /tmp/l -c 'npm i'", 'sfw npm i'],
+    ["nix-shell --run 'npm i'", 'sfw npm i'],
+    ["watch 'npm i'", 'sfw npm i'],
+    ['find . -name package.json -execdir npm install \\;', 'sfw npm install'],
+    ['iex "npm install x"', 'sfw npm install x'],
+    ['echo $(case x in a) npm install x;; esac)', 'sfw npm install x'],
   ])('looks inside nested scripts: %j', (command, suggestion) => {
     expect(suggestions(command)).toEqual([suggestion])
   })
 
+  it.each([
+    'cat <<< x\nnpm install x',
+    "echo $'\\''; npm install x",
+    'echo {#,a}; npm install x',
+    'echo }#x; npm install x',
+  ])('keeps reading after tricky quoting: %j', command => {
+    expect(suggestions(command)).toEqual(['sfw npm install x'])
+  })
+
   it('reports each install once', () => {
     expect(suggestions('bash -c "$(npm i x)"')).toEqual(['sfw npm i x'])
+  })
+
+  it('denies commands too long to check', () => {
+    const [long] = findUnprotectedInstalls('a'.repeat(100_001))
+    expect(long?.ecosystem).toBe('unknown')
   })
 
   it('denies commands it cannot read', () => {
@@ -207,6 +241,25 @@ describe('findUnprotectedInstalls: allowed commands', () => {
     "cat > README.md <<'EOF'\n# Setup\n\nnpm install\nEOF",
     'git commit -m "$(cat <<\'EOF\'\nchore: use pnpm\n\npnpm install is required.\nEOF\n)"',
     'ls # npm install lodash',
+    'command -v yarn',
+    'if command -v yarn >/dev/null; then echo y; fi',
+    'npm uninstall -g yarn',
+    'rm -rf yarn',
+    'pkill -f yarn',
+    'node build.js npm install',
+    'yarn --silent lint',
+    'yarn -s typecheck',
+    'npx --no-install tsc',
+    'npm exec --no -- eslint .',
+    'ls -d */ | xargs -I{} yarn --cwd {} build',
+    'mkdir -p {a,b}/yarn',
+    'sudo apt-get install -y yarn',
+    'volta install -g yarn',
+    'npm install --help',
+    'pnpm add --help',
+    'yarn add --help',
+    'uv add --help',
+    'git status',
     'ls -la',
     '',
     '   ',
@@ -227,6 +280,24 @@ describe('findUnprotectedInstalls: allowed commands', () => {
     expect(suggestions('npm install -g sfw typescript')).toEqual([
       'sfw npm install -g sfw typescript',
     ])
+  })
+})
+
+describe('npx with a local binary', () => {
+  it('allows a binary installed in node_modules/.bin and denies a fetch', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'install-gate-npx-'))
+    const binDir = path.join(root, 'node_modules', '.bin')
+    mkdirSync(binDir, { recursive: true })
+    writeFileSync(path.join(binDir, 'tsc'), '')
+    const nested = path.join(root, 'packages', 'app')
+    mkdirSync(nested, { recursive: true })
+    const check = (command: string) =>
+      findUnprotectedInstalls(command, { cwd: nested, platform: 'darwin' })
+    expect(check('npx tsc --noEmit')).toEqual([])
+    expect(check('npm exec tsc')).toEqual([])
+    expect(check('npx tsc@5 --noEmit')).toHaveLength(1)
+    expect(check('npx -y tsc')).toHaveLength(1)
+    expect(check('npx eslint .')).toHaveLength(1)
   })
 })
 

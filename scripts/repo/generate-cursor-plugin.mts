@@ -48,6 +48,10 @@ export const CURSOR_HOOK_SCRIPT_RELATIVE =
 
 export const SHELL_WORDS_SOURCE_RELATIVE =
   'skills/_shared/hooks/shell-words.mjs'
+export const COMMAND_WORDS_SOURCE_RELATIVE =
+  'skills/_shared/hooks/command-words.mjs'
+export const INSTALL_CLASSIFY_SOURCE_RELATIVE =
+  'skills/_shared/hooks/install-classify.mjs'
 export const INSTALL_GATE_SOURCE_RELATIVE =
   'skills/_shared/hooks/install-gate.mjs'
 export const CURSOR_HOOK_SOURCE_RELATIVE =
@@ -161,7 +165,7 @@ export function buildHooksConfig(): Record<string, unknown> {
     hooks: {
       beforeShellExecution: [
         {
-          command: `node "\${CURSOR_PLUGIN_ROOT}/${CURSOR_HOOK_SCRIPT_RELATIVE}"`,
+          command: `node ${CURSOR_HOOK_SCRIPT_RELATIVE}`,
           timeout: 10,
         },
       ],
@@ -171,13 +175,15 @@ export function buildHooksConfig(): Record<string, unknown> {
 
 export const HOOK_SOURCES_RELATIVE = [
   SHELL_WORDS_SOURCE_RELATIVE,
+  COMMAND_WORDS_SOURCE_RELATIVE,
+  INSTALL_CLASSIFY_SOURCE_RELATIVE,
   INSTALL_GATE_SOURCE_RELATIVE,
   CURSOR_HOOK_SOURCE_RELATIVE,
 ] as const
 
-const IMPORT_LINE_RE = /^import ([^\n]+) from '([^']+)'\n/gm
+const IMPORT_LINE_RE = /^import (\{[^}]*\}|[^\n{]+) from '([^']+)'\n/gm
 
-const NAMED_IMPORT_RE = /^\{([^}]*)\}$/
+const NAMED_IMPORT_RE = /^\{([^}]*)\}$/s
 
 const DEFAULT_IMPORT_RE = /^[A-Za-z_$][\w$]*$/
 
@@ -240,8 +246,32 @@ function renderHookImports(imports: HookImports): string[] {
   return lines
 }
 
+const TOP_LEVEL_NAME_RE =
+  /^(?:export )?(?:async )?(?:function\*? |const |let |class )([\w$]+)/gm
+
+function checkTopLevelNames(
+  seen: Map<string, string>,
+  relative: string,
+  body: string,
+): void {
+  for (const match of body.matchAll(TOP_LEVEL_NAME_RE)) {
+    const name = match[1]!
+    const first = seen.get(name)
+    if (first) {
+      throw new Error(
+        `Cursor hook sources declare the same top-level name twice.\n` +
+          `  Where: ${first} and ${relative}\n` +
+          `  Saw:   ${name}\n` +
+          `  Fix:   rename one of them; the bundle puts every source in one module.`,
+      )
+    }
+    seen.set(name, relative)
+  }
+}
+
 export function buildHookScript(root: string): string {
   const imports: HookImports = { defaults: new Map(), named: new Map() }
+  const names = new Map<string, string>()
   const bodies: string[] = []
   for (let i = 0, { length } = HOOK_SOURCES_RELATIVE; i < length; i += 1) {
     const relative = HOOK_SOURCES_RELATIVE[i]!
@@ -259,6 +289,7 @@ export function buildHookScript(root: string): string {
     if (leftover) {
       throw unbundleableImport(relative, leftover[0])
     }
+    checkTopLevelNames(names, relative, body)
     bodies.push(body.replace(/\n{3,}/g, '\n\n').trim())
   }
   const header =
