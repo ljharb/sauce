@@ -10,6 +10,12 @@ Rules for people and agents who change this repository.
 - `pnpm test` runs the Vitest suite under `test/repo/`. `pnpm run cover` runs it with coverage. `pnpm run test:fuzz-harnesses` runs the fuzz harnesses.
 - `pnpm run type` type-checks the repository and the release-kit.
 - `pnpm run fix` applies lint fixes and formatting.
+- `pnpm run plugins:local` builds the plugin into `tmp/plugins/local/`, pointed at the Socket deployment chosen below, for loading by hand.
+
+## Socket deployments
+
+- Local runs talk to production unless `SOCKET_MCP_URL` or `SOCKET_CLI_API_BASE_URL` is set, in the environment or in a gitignored `.env.local` (see `.env.example`). The plugin builds in `tmp/plugins/`, the API tests, and the Socket CLI read them. Generation ignores them, so committed files always name production.
+- Never commit the address of a deployment other than production, and never name one in a file, commit, issue, or pull request. The scans in `pnpm run check` and `pre-commit` reject `socket.dev` hosts other than the public ones and any host set in those variables. Output from the plugin builds names the variables, not their values.
 
 ## Generated artifacts
 
