@@ -55,7 +55,7 @@ describe('claude', () => {
         marketplace.plugins.map(p => [p['name'], p['source']]),
       ).toStrictEqual([
         ['alpha', './skills/alpha'],
-        ['alpha-sub', './skills/alpha/alpha-sub'],
+        ['alpha-sub', './skills/alpha-sub'],
         ['beta', './skills/beta'],
         ['socket-connect', './skills/socket-connect'],
       ])
@@ -104,11 +104,12 @@ describe('claude', () => {
 })
 
 describe('codex', () => {
-  it('lists top-level skill roots with ./ paths', () => {
+  it('lists every skill directory with ./ paths', () => {
     withFixture(root => {
       const manifest = buildCodexManifest(ctx(root))
       expect(manifest['skills']).toStrictEqual([
         './alpha',
+        './alpha-sub',
         './beta',
         './socket-connect',
       ])

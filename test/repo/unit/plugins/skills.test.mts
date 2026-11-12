@@ -16,15 +16,13 @@ import {
 import { skillMd, withFixture, writeFile, writeSkill } from './fixture.mts'
 
 describe('discoverSkills', () => {
-  it('finds skills at every depth, sorted by name, with their parents', () => {
+  it('finds every skill directly under skills/, sorted by name', () => {
     withFixture(root => {
-      expect(
-        discoverSkills(root).map(s => [s.name, s.relDir, s.parent]),
-      ).toStrictEqual([
-        ['alpha', 'alpha', undefined],
-        ['alpha-sub', 'alpha/alpha-sub', 'alpha'],
-        ['beta', 'beta', undefined],
-        ['socket-connect', 'socket-connect', undefined],
+      expect(discoverSkills(root).map(s => s.name)).toStrictEqual([
+        'alpha',
+        'alpha-sub',
+        'beta',
+        'socket-connect',
       ])
     })
   })
@@ -53,27 +51,28 @@ describe('discoverSkills', () => {
     })
   })
 
-  it('finds a skill nested below a plain directory', () => {
+  it.each(['alpha/nested', 'beta/group/deep', 'plain/deep'])(
+    'refuses a skill nested at skills/%s',
+    rel => {
+      withFixture(root => {
+        writeSkill(root, rel)
+        expect(() => discoverSkills(root)).toThrow(
+          `skills/${rel}/SKILL.md is nested; move it to skills/<name>/SKILL.md`,
+        )
+      })
+    },
+  )
+
+  it('ignores a top-level directory with no skill in it', () => {
     withFixture(root => {
-      writeSkill(root, 'beta/group/deep')
-      const deep = discoverSkills(root).find(s => s.name === 'deep')!
-      expect(deep.relDir).toBe('beta/group/deep')
-      expect(deep.parent).toBe('beta')
+      writeFile(root, 'skills/plain/notes.md', '# Notes\n')
+      expect(discoverSkills(root).map(s => s.name)).not.toContain('plain')
     })
   })
 
   it('returns nothing when skills/ is missing', () => {
     withFixture(root => {
       expect(discoverSkills(path.join(root, 'nowhere'))).toStrictEqual([])
-    })
-  })
-
-  it('refuses two skills with the same name', () => {
-    withFixture(root => {
-      writeSkill(root, 'beta/alpha-sub')
-      expect(() => discoverSkills(root)).toThrow(
-        /skills\/alpha\/alpha-sub and skills\/beta\/alpha-sub are both named 'alpha-sub'/,
-      )
     })
   })
 
@@ -119,7 +118,7 @@ describe('discoverSkills', () => {
 })
 
 describe('skillOwnFiles', () => {
-  it('lists a skill’s files without nested skills or _ and . entries', () => {
+  it('lists a skill’s files without _ and . entries', () => {
     withFixture(root => {
       const alpha = discoverSkills(root).find(s => s.name === 'alpha')!
       expect([...skillOwnFiles(alpha).keys()]).toStrictEqual([
@@ -146,9 +145,9 @@ describe('findInlineShell', () => {
   it('finds an inline shell snippet in any Markdown file of a skill', () => {
     withFixture(root => {
       writeFile(root, 'skills/beta/refs/cmd.md', 'Today is !`date`.\n')
-      writeFile(root, 'skills/alpha/alpha-sub/x.md', 'Run !`ls -la`\n')
+      writeFile(root, 'skills/alpha-sub/x.md', 'Run !`ls -la`\n')
       expect(findInlineShell(discoverSkills(root))).toStrictEqual([
-        'skills/alpha/alpha-sub/x.md',
+        'skills/alpha-sub/x.md',
         'skills/beta/refs/cmd.md',
       ])
     })

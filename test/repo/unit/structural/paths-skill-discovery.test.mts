@@ -6,11 +6,19 @@ import { REPO_ROOT } from '../../../../scripts/repo/paths.mts'
 export const SKILLS_DIR = path.join(REPO_ROOT, 'skills')
 
 /**
- * Top-level skill directories expected under skills/
+ * Skill directories expected directly under skills/
  */
-const EXPECTED_TOP_LEVEL = [
+const EXPECTED_SKILLS = [
+  'brew-publish',
+  'cargo-publish',
+  'github-release',
   'knowledge-update',
+  'npm-publish',
   'socket-connect',
+  'socket-dep-cleanup',
+  'socket-dep-patch',
+  'socket-dep-replace',
+  'socket-dep-upgrade',
   'socket-firewall',
   'socket-fix',
   'socket-incident-response',
@@ -21,39 +29,10 @@ const EXPECTED_TOP_LEVEL = [
   'socket-release',
   'socket-sbom',
   'socket-scan',
+  'socket-scan-setup',
   'socket-setup',
   'socket-vet-agent-tools',
 ]
-
-/**
- * Subskills expected under skills/socket-fix/
- */
-const EXPECTED_SUBSKILLS: Record<string, string[]> = {
-  'socket-fix': [
-    'socket-dep-cleanup',
-    'socket-dep-patch',
-    'socket-dep-replace',
-    'socket-dep-upgrade',
-  ],
-  'socket-scan': ['socket-scan-setup'],
-}
-
-export /**
- * All skill directory paths (top-level as name, subskills as parent/name)
- */
-function getAllSkillPaths(): string[] {
-  const paths: string[] = []
-  const dirs = getSkillDirs()
-  for (let i = 0, { length } = dirs; i < length; i += 1) {
-    const dir = dirs[i]!
-    paths.push(dir)
-    const subs = getSubSkillDirs(dir)
-    for (let j = 0, sublen = subs.length; j < sublen; j += 1) {
-      paths.push(`${dir}/${subs[j]!}`)
-    }
-  }
-  return paths.toSorted()
-}
 
 export function getSkillDirs(): string[] {
   return readdirSync(SKILLS_DIR, { withFileTypes: true })
@@ -65,18 +44,11 @@ export function getSkillDirs(): string[] {
     .toSorted()
 }
 
-export function getSubSkillDirs(parent: string): string[] {
-  const parentDir = path.join(SKILLS_DIR, parent)
-  if (!existsSync(parentDir)) {
-    return []
-  }
-  return readdirSync(parentDir, { withFileTypes: true })
-    .filter(
-      e =>
-        e.isDirectory() && !e.name.startsWith('_') && !e.name.startsWith('.'),
-    )
-    .map(e => e.name)
-    .toSorted()
+/**
+ * Every skill directory path relative to skills/, which is its name.
+ */
+export function getAllSkillPaths(): string[] {
+  return getSkillDirs()
 }
 
 describe('Skill Discovery', () => {
@@ -84,63 +56,19 @@ describe('Skill Discovery', () => {
     expect(existsSync(SKILLS_DIR)).toBe(true)
   })
 
-  it('every expected skill directory exists', () => {
-    const dirs = getSkillDirs()
-    for (let i = 0, { length } = EXPECTED_TOP_LEVEL; i < length; i += 1) {
-      const skill = EXPECTED_TOP_LEVEL[i]!
-      expect(dirs, `missing skill directory: ${skill}`).toContain(skill)
-    }
-    const subskillEntries = Object.entries(EXPECTED_SUBSKILLS)
-    for (let j = 0, sjlen = subskillEntries.length; j < sjlen; j += 1) {
-      const [parent, subs] = subskillEntries[j]!
-      const subDirs = getSubSkillDirs(parent)
-      for (let i = 0, { length } = subs; i < length; i += 1) {
-        const sub = subs[i]!
-        expect(
-          subDirs,
-          `missing subskill directory: ${parent}/${sub}`,
-        ).toContain(sub)
-      }
-    }
+  it('holds exactly the expected skill directories', () => {
+    expect(
+      getSkillDirs(),
+      'Update EXPECTED_SKILLS in this test if a skill was added or removed.',
+    ).toStrictEqual(EXPECTED_SKILLS)
   })
 
   it('every skill directory contains a SKILL.md', () => {
-    const skillPaths = getAllSkillPaths()
-    for (let i = 0, { length } = skillPaths; i < length; i += 1) {
-      const skillPath = skillPaths[i]!
-      const skillMd = path.join(SKILLS_DIR, skillPath, 'SKILL.md')
-      expect(existsSync(skillMd), `${skillPath}/SKILL.md does not exist`).toBe(
-        true,
-      )
-    }
-  })
-
-  it('no orphan skill directories (dirs without SKILL.md)', () => {
-    const orphans = getAllSkillPaths().filter(
-      skillPath => !existsSync(path.join(SKILLS_DIR, skillPath, 'SKILL.md')),
-    )
-    expect(orphans, `orphan directories: ${orphans.join(', ')}`).toEqual([])
-  })
-
-  it('no unexpected skill directories', () => {
-    const dirs = getSkillDirs()
-    const unexpected = dirs.filter(d => !EXPECTED_TOP_LEVEL.includes(d))
-    expect(
-      unexpected,
-      `Unexpected top-level skill directories: ${unexpected.join(', ')}. ` +
-        `Update EXPECTED_TOP_LEVEL in this test if intentional.`,
-    ).toEqual([])
-
-    const subskillEntries = Object.entries(EXPECTED_SUBSKILLS)
-    for (let i = 0, { length } = subskillEntries; i < length; i += 1) {
-      const [parent, expectedSubs] = subskillEntries[i]!
-      const subDirs = getSubSkillDirs(parent)
-      const unexpectedSubs = subDirs.filter(d => !expectedSubs.includes(d))
+    for (const skill of getSkillDirs()) {
       expect(
-        unexpectedSubs,
-        `Unexpected subskill directories under ${parent}: ${unexpectedSubs.join(', ')}. ` +
-          `Update EXPECTED_SUBSKILLS in this test if intentional.`,
-      ).toEqual([])
+        existsSync(path.join(SKILLS_DIR, skill, 'SKILL.md')),
+        `${skill}/SKILL.md does not exist`,
+      ).toBe(true)
     }
   })
 })

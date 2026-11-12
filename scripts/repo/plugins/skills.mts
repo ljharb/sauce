@@ -21,17 +21,9 @@ export interface Skill {
   name: string
   description: string
   /**
-   * Absolute path of the skill directory.
+   * Absolute path of the skill directory, skills/<name>.
    */
   dir: string
-  /**
-   * Path of the skill directory relative to skills/, '/'-separated.
-   */
-  relDir: string
-  /**
-   * Name of the skill whose directory holds this one, if any.
-   */
-  parent: string | undefined
   /**
    * The Agent Skills `metadata` map.
    */
@@ -80,7 +72,7 @@ export function findInlineShell(skills: readonly Skill[]): string[] {
         rel.endsWith('.md') &&
         INLINE_SHELL_RE.test(readFileSync(file, 'utf-8'))
       ) {
-        offenders.push(`skills/${skill.relDir}/${rel}`)
+        offenders.push(`skills/${skill.name}/${rel}`)
       }
     }
   }
@@ -113,33 +105,44 @@ export function symlinkError(where: string): Error {
 }
 
 /**
- * Every skill under skills/, at any depth, sorted by name. Directories whose
- * names start with '_' or '.' are skipped at every depth. Throws on a
- * symlink, on a SKILL.md that breaks the Agent Skills rules, on two skills
- * with the same name, and on a `requires` entry that names no skill.
+ * Every skill, sorted by name. A skill is a directory directly under skills/
+ * that holds a SKILL.md; some agents load skills only from that one level.
+ * Directories whose names start with '_' or '.' are skipped. Throws on a
+ * symlink, on a SKILL.md anywhere deeper, on a SKILL.md that breaks the
+ * Agent Skills rules, and on a `requires` entry that names no skill.
  */
 export function discoverSkills(root: string): Skill[] {
   const dir = skillsDir(root)
   const skills: Skill[] = []
-  if (existsSync(dir)) {
-    walk(dir, '', undefined, skills)
-  }
   const problems: string[] = []
-  const byName = new Map<string, Skill>()
-  for (const skill of skills) {
-    const prior = byName.get(skill.name)
-    if (prior) {
-      problems.push(
-        `skills/${prior.relDir} and skills/${skill.relDir} are both named '${skill.name}'`,
-      )
+  if (existsSync(dir)) {
+    for (const entry of sortedEntries(dir)) {
+      if (isSkippedEntry(entry.name)) {
+        continue
+      }
+      const full = path.join(dir, entry.name)
+      if (entry.isSymbolicLink()) {
+        throw symlinkError(full)
+      }
+      if (!entry.isDirectory()) {
+        continue
+      }
+      if (existsSync(path.join(full, 'SKILL.md'))) {
+        skills.push(readSkill(full))
+      }
+      for (const nested of findNestedSkillMds(full, entry.name)) {
+        problems.push(
+          `skills/${nested} is nested; move it to skills/<name>/SKILL.md`,
+        )
+      }
     }
-    byName.set(skill.name, skill)
   }
+  const names = new Set(skills.map(skill => skill.name))
   for (const skill of skills) {
     for (const required of skillRequires(skill)) {
-      if (!byName.has(required)) {
+      if (!names.has(required)) {
         problems.push(
-          `skills/${skill.relDir}/SKILL.md requires '${required}', which is not a skill`,
+          `skills/${skill.name}/SKILL.md requires '${required}', which is not a skill`,
         )
       }
     }
@@ -226,40 +229,35 @@ function checkLength(key: string, value: unknown, max: number): string[] {
   return [`${key} must be a string of 1 to ${max} characters`]
 }
 
-function readSkill(
-  dir: string,
-  relDir: string,
-  parent: string | undefined,
-): Skill {
+function readSkill(dir: string): Skill {
+  const name = path.basename(dir)
   const skillMd = path.join(dir, 'SKILL.md')
   const text = readFileSync(skillMd, 'utf-8')
-  const problems = validateSkillMd(path.basename(dir), text)
+  const problems = validateSkillMd(name, text)
   if (problems.length > 0) {
     throw new Error(
-      `skills/${relDir}/SKILL.md breaks the Agent Skills rules:\n${problems.map(p => `  - ${p}`).join('\n')}`,
+      `skills/${name}/SKILL.md breaks the Agent Skills rules:\n${problems.map(p => `  - ${p}`).join('\n')}`,
     )
   }
   const { fields, metadata = {} } = parseSkillFrontmatter(text)
   const description = fields.get('description')
   return {
-    name: path.basename(dir),
+    name,
     description: isNonStringScalar(description)
       ? description.nonString
       : String(description),
     dir,
-    relDir,
-    parent,
     metadata,
     frontmatter: fields,
   }
 }
 
-function walk(
-  dir: string,
-  relDir: string,
-  parent: string | undefined,
-  out: Skill[],
-): void {
+/**
+ * Every SKILL.md below a top-level directory of skills/, as paths relative
+ * to skills/. Throws on a symlink.
+ */
+function findNestedSkillMds(dir: string, rel: string): string[] {
+  const found: string[] = []
   for (const entry of sortedEntries(dir)) {
     if (isSkippedEntry(entry.name)) {
       continue
@@ -271,21 +269,19 @@ function walk(
     if (!entry.isDirectory()) {
       continue
     }
-    const rel = relDir ? `${relDir}/${entry.name}` : entry.name
-    let nextParent = parent
+    const childRel = `${rel}/${entry.name}`
     if (existsSync(path.join(full, 'SKILL.md'))) {
-      const skill = readSkill(full, rel, parent)
-      out.push(skill)
-      nextParent = skill.name
+      found.push(`${childRel}/SKILL.md`)
     }
-    walk(full, rel, nextParent, out)
+    found.push(...findNestedSkillMds(full, childRel))
   }
+  return found
 }
 
 /**
  * The files that belong to one skill: everything in its directory except
- * '_'/'.' entries and nested skill directories, keyed by path relative to the
- * skill directory ('/'-separated).
+ * '_'/'.' entries, keyed by path relative to the skill directory
+ * ('/'-separated).
  */
 export function skillOwnFiles(skill: Skill): Map<string, string> {
   const files = new Map<string, string>()
@@ -308,9 +304,7 @@ function collectOwnFiles(
       throw symlinkError(full)
     }
     if (entry.isDirectory()) {
-      if (!existsSync(path.join(full, 'SKILL.md'))) {
-        collectOwnFiles(full, rel, out)
-      }
+      collectOwnFiles(full, rel, out)
     } else if (entry.isFile()) {
       out.set(rel, full)
     }

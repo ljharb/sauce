@@ -39,7 +39,7 @@ export function buildClaudeMarketplace(
       const requires = skillRequires(skill)
       return {
         name: skill.name,
-        source: `./skills/${skill.relDir}`,
+        source: `./skills/${skill.name}`,
         skills: './',
         description: skill.description,
         dependencies: requires.length > 0 ? requires : undefined,

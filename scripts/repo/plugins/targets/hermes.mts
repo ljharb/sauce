@@ -3,11 +3,9 @@
  * hermes/.
  *
  * Hermes clones the plugin's directory and scans every file in it, with a
- * file-count and size cap, so the plugin lives in its own small directory.
- * Hermes loads only skills/<name>/SKILL.md, one level deep, so every skill,
- * nested ones included, is copied byte for byte into its own top-level
- * directory. Hermes rejects symlinks that leave the plugin root, so skills
- * are copied, not linked.
+ * file-count and size cap, so the plugin lives in its own small directory
+ * with every skill copied byte for byte into hermes/skills/. Hermes rejects
+ * symlinks that leave the plugin root, so skills are copied, not linked.
  *
  * No mcp.json ships: an Agent Plugins v1 remote server entry accepts only
  * type, url and headers, so it cannot turn on OAuth, and the Socket MCP
@@ -73,8 +71,7 @@ export function buildHermesManifest(
 
 /**
  * Every file hermes/skills/ must hold, keyed by path relative to it, valued
- * by source path. Each skill's own files go under its name; nested skills
- * get their own entry instead of riding along with their parent.
+ * by source path.
  */
 export function hermesSkillFiles(ctx: PluginInputs): Map<string, string> {
   const files = new Map<string, string>()

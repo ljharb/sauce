@@ -101,13 +101,13 @@ export function loadSkills(root: string = ROOT): Skill[] {
     const category = skillCategory(skill)
     if (!category || !known.has(category)) {
       throw new Error(
-        `skills/${skill.relDir}/SKILL.md needs metadata.category set to one of: ${[...known].join(', ')}`,
+        `skills/${skill.name}/SKILL.md needs metadata.category set to one of: ${[...known].join(', ')}`,
       )
     }
     return {
       name: skill.name,
       description: skill.description,
-      path: `skills/${skill.relDir}`,
+      path: `skills/${skill.name}`,
       category,
     }
   })

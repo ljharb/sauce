@@ -13,8 +13,16 @@
     "patching"
   ],
   "skills": [
+    "./brew-publish",
+    "./cargo-publish",
+    "./github-release",
     "./knowledge-update",
+    "./npm-publish",
     "./socket-connect",
+    "./socket-dep-cleanup",
+    "./socket-dep-patch",
+    "./socket-dep-replace",
+    "./socket-dep-upgrade",
     "./socket-firewall",
     "./socket-fix",
     "./socket-incident-response",
@@ -25,6 +33,7 @@
     "./socket-release",
     "./socket-sbom",
     "./socket-scan",
+    "./socket-scan-setup",
     "./socket-setup",
     "./socket-vet-agent-tools"
   ],

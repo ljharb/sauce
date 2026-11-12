@@ -116,8 +116,8 @@ export function makeFixture(options: FixtureOptions = {}): string {
   writeSkill(root, 'alpha', {
     metadata: { category: 'analysis', requires: 'socket-connect' },
   })
-  writeSkill(root, 'alpha/alpha-sub', { metadata: { category: 'fix' } })
-  writeFile(root, 'skills/alpha/alpha-sub/references/sub.md', '# Sub\n')
+  writeSkill(root, 'alpha-sub', { metadata: { category: 'fix' } })
+  writeFile(root, 'skills/alpha-sub/references/sub.md', '# Sub\n')
   writeFile(root, 'skills/alpha/references/notes.md', '# Notes\n')
   writeFile(root, 'skills/alpha/_draft.md', '# Draft\n')
   writeFile(root, 'skills/alpha/.DS_Store', 'junk')
