@@ -195,7 +195,8 @@ The rollout is per organization. Until an organization confirms the move, policy
 Check the migration status before you change anything (needs the `alert-policy:list` scope):
 
 ```shell
-curl -u "$SOCKET_CLI_API_TOKEN:" https://api.socket.dev/v0/orgs/<org-slug>/alert-policies/migration/status
+curl --variable %SOCKET_CLI_API_TOKEN --expand-user '{{SOCKET_CLI_API_TOKEN}}:' \
+  https://api.socket.dev/v0/orgs/<org-slug>/alert-policies/migration/status
 ```
 
 The `state` field is one of:
@@ -219,18 +220,19 @@ Check the migration status first (see above).
 
 The CLI has no command for Policies, so the REST API with an organization-wide API token is the only scripted way to read or change them. This is a departure from the usual `/socket-connect` sign-in: `pnpm dlx socket login` does not cover these calls. Repo-restricted tokens get 403. Have the user set the token as `SOCKET_CLI_API_TOKEN` in their own shell or CI secret store (the same variable `/socket-sbom` uses for its API calls), never in the chat, and never print it.
 
-Always try an alert-policies or rules write with `?dry_run=true` first: Socket returns 200 with `dry_run: true` and saves nothing. Only those endpoints support dry run.
+The examples read the token with curl's `--variable` and `--expand-user` (curl 8.3 or later), so it never appears in the process list. Always try an alert-policies or rules write with `?dry_run=true` first: Socket returns 200 with `dry_run: true` and saves nothing. Only those endpoints support dry run.
 
 List alert policies (the default policy comes first):
 
 ```shell
-curl -u "$SOCKET_CLI_API_TOKEN:" https://api.socket.dev/v0/orgs/<org-slug>/alert-policies
+curl --variable %SOCKET_CLI_API_TOKEN --expand-user '{{SOCKET_CLI_API_TOKEN}}:' \
+  https://api.socket.dev/v0/orgs/<org-slug>/alert-policies
 ```
 
 Add a rule to a policy as a dry run:
 
 ```shell
-curl -u "$SOCKET_CLI_API_TOKEN:" -X POST \
+curl --variable %SOCKET_CLI_API_TOKEN --expand-user '{{SOCKET_CLI_API_TOKEN}}:' -X POST \
   "https://api.socket.dev/v0/orgs/<org-slug>/alert-policies/<policy-id>/rules?dry_run=true" \
   -H "Content-Type: application/json" \
   -d '{"name":"Block critical CVEs","action":"error","vigil_selector":{"finding.alertType":"criticalCVE"}}'
