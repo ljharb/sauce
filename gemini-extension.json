@@ -2,7 +2,7 @@
   "name": "socket-skills",
   "description": "Agent Skills for dependency security including vulnerability scanning, package review, patching, setup and configuration, and secure dependency updates via Socket.dev",
   "version": "1.0.0",
-  "contextFileName": "agents/README.md",
+  "contextFileName": "fallback/AGENTS.md",
   "mcpServers": {
     "socket": {
       "httpUrl": "https://mcp.socket.dev/"

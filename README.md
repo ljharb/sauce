@@ -16,7 +16,7 @@ Socket Security Skills are definitions for dependency security tasks like vulner
 - **Roo Code** - via Skills CLI
 - **Any agent supporting the Agent Skills standard** - via `pnpm dlx skills add`
 
-If your agent isn't listed above but supports skills, extensions, or custom instructions, it can likely use these skills via the [Skills CLI](https://skills.sh/) or the [`agents/README.md`](agents/README.md) fallback.
+If your agent isn't listed above but supports skills, extensions, or custom instructions, it can likely use these skills via the [Skills CLI](https://skills.sh/) or the [`fallback/AGENTS.md`](fallback/AGENTS.md) fallback.
 
 ### How do Skills work?
 
@@ -25,7 +25,7 @@ Skills are self-contained folders that package instructions, scripts, and resour
 > [!NOTE]
 > 'Skills' is an Anthropic term from Claude AI and Claude Code; other agent tools use their own names for the same idea. OpenAI Codex uses the open [Agent Skills](https://agentskills.io/specification) format, where each skill is a directory with a `SKILL.md` file that Codex discovers from standard `.agents/skills` locations documented in the [Codex Skills guide](https://developers.openai.com/codex/skills/). Codex also works with an `AGENTS.md` file. Google Gemini uses 'extensions', defined in a `gemini-extension.json` file. This repo works with all of them.
 
-If your agent doesn't support skills, use [`agents/README.md`](agents/README.md) as a fallback: copy it into your project as `AGENTS.md`.
+If your agent doesn't support skills, use [`fallback/AGENTS.md`](fallback/AGENTS.md) as a fallback: copy it into your project as `AGENTS.md`.
 
 ## Install
 
@@ -97,7 +97,7 @@ The scan and fix skills also run the Socket CLI, which signs in separately with 
 
 If you installed single-skill plugins such as `socket-scan@socket-skills` from this marketplace before, remove each one with `codex plugin remove <name>@socket-skills` before you install `socket-skills`. Otherwise Codex keeps the old copies, stops updating them, and loads each skill twice.
 
-To use skills without the plugin, copy or symlink folders from `skills/` into a standard `.agents/skills` location, as described in the [Codex Skills guide](https://developers.openai.com/codex/skills/). If your Codex setup relies on `AGENTS.md`, copy the generated [`agents/README.md`](agents/README.md) into your project as `AGENTS.md`.
+To use skills without the plugin, copy or symlink folders from `skills/` into a standard `.agents/skills` location, as described in the [Codex Skills guide](https://developers.openai.com/codex/skills/). If your Codex setup relies on `AGENTS.md`, copy the generated [`fallback/AGENTS.md`](fallback/AGENTS.md) into your project as `AGENTS.md`.
 
 ### Gemini CLI
 
@@ -174,7 +174,7 @@ For any agent that supports the Agent Skills standard or custom instructions:
 pnpm dlx skills add SocketDev/skills
 ```
 
-1. Or manually copy the [`agents/README.md`](agents/README.md) file into your agent's instructions/context directory as `AGENTS.md`. This file contains a summary of all available skills and their locations.
+1. Or manually copy the [`fallback/AGENTS.md`](fallback/AGENTS.md) file into your agent's instructions/context directory as `AGENTS.md`. This file contains a summary of all available skills and their locations.
 
 2. Skills call the Socket CLI and Batch PURL API directly, so no MCP server is required. Most agent plugins also bundle the hosted Socket MCP server (`https://mcp.socket.dev/`), which signs you in through the browser instead of asking for an API key. The `socket-connect` skill lists which ones do and how to sign in.
 
@@ -186,7 +186,7 @@ pnpm dlx skills add SocketDev/skills
   security controls and CLI workflows.
 - [Skill catalog](#available-skills): descriptions and source links for each
   installable skill.
-- [Agent fallback bundle](agents/README.md): instructions for agents that do
+- [Agent fallback bundle](fallback/AGENTS.md): instructions for agents that do
   not load skills directly.
 
 This repository contains security-focused skills for dependency management. You can also contribute your own skills to the repository.
@@ -281,7 +281,7 @@ The full writeup with config and command examples is in [docs/best-practices.md]
 
 1. Create a new directory under `skills/` with a descriptive name
 2. Add a `SKILL.md` file with YAML frontmatter followed by guidance content. The frontmatter needs `name`, `description`, and `metadata.category` (one of `setup`, `analysis`, `fix`, `protect`, `reference`, or `release`), plus `metadata.requires` when the skill needs another one, such as `socket-connect` for the MCP server
-3. Run `pnpm run generate` to regenerate every agent plugin, `agents/README.md`, and this README's skills table
+3. Run `pnpm run generate` to regenerate every agent plugin, `fallback/AGENTS.md`, and this README's skills table
 4. Run `pnpm run check` to verify everything is in sync
 5. Run `pnpm run plugins:load` to have each installed agent CLI load the plugin and list its skills
 6. Submit a pull request

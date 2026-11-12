@@ -1,5 +1,5 @@
 /**
- * The one way to find skills. Every plugin target, the agents/README.md
+ * The one way to find skills. Every plugin target, the fallback/AGENTS.md
  * generator, and the structural tests read skills through discoverSkills, so
  * they agree on which directories are skills, what each one is named, and
  * what its frontmatter says.

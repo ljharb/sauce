@@ -62,13 +62,13 @@ export interface DocTable {
 /**
  * Every human-facing markdown document this repo publishes.
  * `docs/agents-template.md` is deliberately absent: its `{{#skills}}` marker
- * rows are not table rows, and its rendered output, `agents/README.md`, is
+ * rows are not table rows, and its rendered output, `fallback/AGENTS.md`, is
  * checked here instead.
  */
 export function getLintedDocs(): string[] {
   const docs = [
     path.join(REPO_ROOT, 'README.md'),
-    path.join(REPO_ROOT, 'agents', 'README.md'),
+    path.join(REPO_ROOT, 'fallback', 'AGENTS.md'),
     ...getSkillMarkdownFiles(SKILLS_DIR),
   ]
   const sharedDocs = readdirSync(SHARED_DOCS_DIR)

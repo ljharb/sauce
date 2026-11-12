@@ -15,6 +15,7 @@ import process from 'node:process'
 
 import { spawn } from '@socketsecurity/lib-stable/process/spawn/child'
 
+import { FALLBACK_FILE } from './constants/fallback.mts'
 import { SHIPPED_INSTRUCTION_DIRS } from './constants/shipped-surfaces.mts'
 import { REPO_ROOT } from './paths.mts'
 import { MISSING, treeSignature } from './plugins/output.mts'
@@ -32,7 +33,7 @@ const PLUGINS = 'scripts/repo/plugins/generate.mts'
 const OXFMT = 'node_modules/oxfmt/bin/oxfmt'
 
 export const GENERATED_FILES: readonly string[] = [
-  'agents/README.md',
+  FALLBACK_FILE,
   'README.md',
   ...generatedFiles(),
 ]
@@ -71,7 +72,7 @@ async function generate(): Promise<void> {
   await runScript('scripts/repo/generate-agents.mts')
   await runScript(
     OXFMT,
-    'agents/README.md',
+    FALLBACK_FILE,
     'README.md',
     'skills',
     ...SHIPPED_INSTRUCTION_DIRS,

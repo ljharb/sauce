@@ -20,9 +20,9 @@ describe('Manifest Consistency', () => {
     expect(packageJson['version']).toBe('0.0.0')
   })
 
-  describe('agents/README.md', () => {
+  describe('fallback/AGENTS.md', () => {
     const agentsMd = readFileSync(
-      path.join(REPO_ROOT, 'agents', 'README.md'),
+      path.join(REPO_ROOT, 'fallback', 'AGENTS.md'),
       'utf-8',
     )
 
@@ -36,7 +36,7 @@ describe('Manifest Consistency', () => {
       for (const skill of skills) {
         expect(
           new RegExp(`\\|\\s*${skill.name}\\s*\\|`).test(agentsMd),
-          `agents/README.md table does not list skill '${skill.name}'`,
+          `fallback/AGENTS.md table does not list skill '${skill.name}'`,
         ).toBe(true)
       }
     })

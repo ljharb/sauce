@@ -197,13 +197,13 @@ describe('cursor', () => {
 })
 
 describe('gemini', () => {
-  it('loads agents/README.md and the hosted server', () => {
+  it('loads fallback/AGENTS.md and the hosted server', () => {
     withFixture(root => {
       expect(buildGeminiManifest(ctx(root))).toStrictEqual({
         name: 'fixture-skills',
         description: 'Fixture skills.',
         version: '9.9.9',
-        contextFileName: 'agents/README.md',
+        contextFileName: 'fallback/AGENTS.md',
         mcpServers: { socket: { httpUrl: SOCKET_MCP.url } },
       })
     })

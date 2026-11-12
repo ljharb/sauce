@@ -8,7 +8,7 @@ run-name: 'ci: publish claude marketplace'
 #
 #   1. Re-runs `pnpm run generate` to make sure every artifact in the
 #      .claude-plugin/, .cursor-plugin/, gemini-extension.json,
-#      agents/, and the README skill table reflects the current
+#      fallback/, and the README skill table reflects the current
 #      SKILL.md / package.json / scripts/* source-of-truth.
 #   2. Verifies the regen produced no drift. If anything changed, the
 #      workflow fails — the dispatcher's job is to merge a PR that
