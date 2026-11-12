@@ -4,7 +4,7 @@
 // pattern.
 /* eslint-disable no-shadow -- cached-loop idiom */
 /**
- * Generate agents/README.md — the AGENTS.md-style fallback bundle — from
+ * Generate fallback/AGENTS.md — the AGENTS.md-style fallback bundle — from
  * docs/agents-template.md and SKILL.md frontmatter.
  *
  * Also updates the skills table in README.md, grouped by each skill's
@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { getDefaultLogger } from '@socketsecurity/lib-stable/logger/default'
+import { FALLBACK_FILE } from './constants/fallback.mts'
 import { REPO_ROOT } from './paths.mts'
 import { discoverSkills, skillCategory } from './plugins/skills.mts'
 import { isMainModule, runMain } from './util/main.mts'
@@ -23,7 +24,7 @@ const logger = getDefaultLogger()
 
 const ROOT = REPO_ROOT
 const TEMPLATE_PATH = path.join(ROOT, 'docs', 'agents-template.md')
-const OUTPUT_PATH = path.join(ROOT, 'agents', 'README.md')
+const OUTPUT_PATH = path.join(ROOT, ...FALLBACK_FILE.split('/'))
 const README_PATH = path.join(ROOT, 'README.md')
 
 const README_TABLE_START = '<!-- BEGIN_SKILLS_TABLE -->'
@@ -93,7 +94,7 @@ export const CATEGORIES: Array<[string, CategoryDef]> = [
 ]
 
 /**
- * Every skill, as agents/README.md and the README table list it.
+ * Every skill, as fallback/AGENTS.md and the README table list it.
  */
 export function loadSkills(root: string = ROOT): Skill[] {
   const known = new Set(CATEGORIES.map(([key]) => key))

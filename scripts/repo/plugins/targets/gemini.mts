@@ -1,5 +1,5 @@
 /**
- * Gemini CLI. The extension loads agents/README.md as its context file and
+ * Gemini CLI. The extension loads fallback/AGENTS.md as its context file and
  * registers the hosted MCP server.
  */
 
@@ -7,13 +7,14 @@ import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 
+import { FALLBACK_FILE } from '../../constants/fallback.mts'
 import { collectUrls, readJson } from '../load.mts'
 import { SOCKET_MCP, socketMcpServers } from '../socket.mts'
 import { definePluginTarget } from '../target.mts'
 import type { LoadCheck, PluginInputs } from '../target.mts'
 
 export const GEMINI_MANIFEST = 'gemini-extension.json'
-export const GEMINI_CONTEXT_FILE = 'agents/README.md'
+export const GEMINI_CONTEXT_FILE = FALLBACK_FILE
 
 export function buildGeminiManifest(
   ctx: PluginInputs,

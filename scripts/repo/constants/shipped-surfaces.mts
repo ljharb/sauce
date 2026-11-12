@@ -8,6 +8,7 @@
  *   fails on any unclassified entry so new surfaces are a conscious call.
  */
 
+import { FALLBACK_DIR } from './fallback.mts'
 import {
   generatedDirs,
   generatedFiles,
@@ -22,8 +23,8 @@ const topLevel = (rel: string): string => rel.split('/')[0]!
  */
 export const SHIPPED_DIRS: readonly string[] = [
   ...new Set([
-    'agents',
     'examples',
+    FALLBACK_DIR,
     'release-kit',
     'skills',
     ...generatedDirs().map(topLevel),

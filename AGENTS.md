@@ -19,7 +19,7 @@ Rules for people and agents who change this repository.
 
 ## Generated artifacts
 
-- `pnpm run generate` rebuilds `agents/README.md`, the `README.md` skills table, every agent plugin's generated files (including `.claude-plugin/marketplace.json`, `gemini-extension.json`, and `hermes/`), and `skills/_shared/docs/agent-sign-in.md` from `skills/` and `.claude-plugin/plugin.json`, then inlines shared sections. Run it after you change a skill, then commit the result. `pnpm run generate:check` fails when anything is out of date.
+- `pnpm run generate` rebuilds `fallback/AGENTS.md`, the `README.md` skills table, every agent plugin's generated files (including `.claude-plugin/marketplace.json`, `gemini-extension.json`, and `hermes/`), and `skills/_shared/docs/agent-sign-in.md` from `skills/` and `.claude-plugin/plugin.json`, then inlines shared sections. Run it after you change a skill, then commit the result. `pnpm run generate:check` fails when anything is out of date.
 
 ## Skills and agent plugins
 

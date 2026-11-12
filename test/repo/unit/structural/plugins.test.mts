@@ -134,7 +134,7 @@ describe('every agent gets every skill', () => {
     expect(readJson('.cursor-plugin/plugin.json')['skills']).toBe('skills')
   })
 
-  it('gemini: agents/README.md, which links every skill', () => {
+  it('gemini: fallback/AGENTS.md, which links every skill', () => {
     const manifest = readJson('gemini-extension.json')
     const context = read(manifest['contextFileName'])
     for (const skill of skills) {
