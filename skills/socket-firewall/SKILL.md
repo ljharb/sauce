@@ -41,7 +41,7 @@ There are two variants. Both use the same `sfw` command.
 
 Sources: <https://docs.socket.dev/docs/socket-firewall-overview> and <https://docs.socket.dev/docs/socket-firewall-free>.
 
-Plans: Socket Firewall Enterprise needs an API key tied to a Socket organization. See <https://socket.dev/pricing> for which plans include it. Do not tell the user which plan they need from memory. Send them to <https://socket.dev/pricing> for current plan details. If `sfw`, the dashboard, or the API says a feature is not available on the user's plan, say so plainly and link the pricing page.
+Plans: Socket Firewall Enterprise needs an API key tied to a Socket organization. Which plans include it can change, so take plan details from <https://socket.dev/pricing>, never from memory. If `sfw`, the dashboard, or the API says a feature is not available on the user's plan, say so plainly and link the pricing page.
 
 ## Step 1: Check That sfw Is Available
 
@@ -98,11 +98,11 @@ The only documented flag is `sfw --help`. Do not rely on other flags such as `--
 | pnpm            | `pnpm store prune` (unreferenced packages only; see below) |
 | pip             | `pip cache purge`                                          |
 | uv              | `uv cache clean`                                           |
-| cargo           | `rm -fr ~/.cargo/registry ~/.cargo/git` (everything)       |
+| cargo           | delete `registry/` and `git/` in `$CARGO_HOME` (see below) |
 
 `pnpm store prune` keeps packages that any project still references, and those install with no network request, so `sfw` never checks them. For a full re-check, delete `node_modules` and the store directory that `pnpm store path` prints. Ask the user first.
 
-Ask the user before running the cargo removal. It deletes every cached crate. Cargo's `cargo clean gc -Zgc` removes only unused crates, but it is unstable and needs a nightly toolchain.
+Cargo has no stable cache-clean command. `$CARGO_HOME` defaults to `.cargo` in the home directory; deleting its `registry` and `git` subdirectories removes every cached crate, so ask the user first. Cargo's `cargo clean gc -Zgc` removes only unused crates, but it is unstable and needs a nightly toolchain.
 
 ## Step 3: Run Installs Through sfw
 

@@ -156,16 +156,16 @@ pnpm dlx socket organization list --json
 
 Set `ORG` to the slug and `SCAN_ID` to the scan ID in the shell. Then call the export endpoint. `SOCKET_CLI_API_TOKEN` must already be set by the user in their own shell. The endpoints need the `report:read` scope and cost 1 quota unit each.
 
-`--fail-with-body` makes curl exit non-zero on an HTTP error such as 401, 403, 404, or 429. Without it, curl exits 0 and writes the API's JSON error into the output file. On failure, show the error body and delete the file.
+`--variable` and `--expand-user` (curl 8.3 or later) have curl read the token from the environment, so it never appears in the process list, and stop with an error when the variable is unset. `--fail-with-body` makes curl exit non-zero on an HTTP error such as 401, 403, 404, or 429. Without it, curl exits 0 and writes the API's JSON error into the output file. On failure, show the error body and delete the file.
 
 ```shell
 # CycloneDX
-curl -sS --fail-with-body -u "$SOCKET_CLI_API_TOKEN:" \
+curl -sS --fail-with-body --variable %SOCKET_CLI_API_TOKEN --expand-user '{{SOCKET_CLI_API_TOKEN}}:' \
   "https://api.socket.dev/v0/orgs/$ORG/export/cdx/$SCAN_ID" -o socket-sbom.cdx.json \
   || { cat socket-sbom.cdx.json; rm -f socket-sbom.cdx.json; }
 
 # SPDX, with vulnerability data
-curl -sS --fail-with-body -u "$SOCKET_CLI_API_TOKEN:" \
+curl -sS --fail-with-body --variable %SOCKET_CLI_API_TOKEN --expand-user '{{SOCKET_CLI_API_TOKEN}}:' \
   "https://api.socket.dev/v0/orgs/$ORG/export/spdx/$SCAN_ID?include_vulnerabilities=true" -o socket-sbom.spdx.json \
   || { cat socket-sbom.spdx.json; rm -f socket-sbom.spdx.json; }
 ```

@@ -64,7 +64,7 @@ If authentication fails or the CLI is not installed, use the `/socket-setup` ski
 
 **Prefer the Socket MCP tools when connected.** Look for tools whose names end in `threat_feed`, `organizations`, `alerts`, `depscore`, `package_files`, `package_file_contents`, and `package_file_grep`. Match on the suffix, never on one hard-coded prefix (see `/socket-connect`, Step 1). If none are present, or a call fails with an authentication error, use `/socket-connect` to sign in through the browser. Never ask the user to paste a token into the chat, and never print one.
 
-**Plans.** The threat feed is a beta feature that needs extra access on the organization. Do not tell the user which plan includes it. If the CLI, the MCP tool, or the API says the feature is not available (for example a 401 or 403 from the threat feed), say so plainly, link <https://socket.dev/pricing>, and continue with the steps that do not need it. Steps 3 to 8 work without the threat feed.
+**Plans.** The threat feed is a beta feature that needs extra access on the organization. Which plans include it can change, so never name one from memory. If the CLI, the MCP tool, or the API says the feature is not available (for example a 401 or 403 from the threat feed), say so plainly, link <https://socket.dev/pricing>, and continue with the steps that do not need it. Steps 3 to 8 work without the threat feed.
 
 ## Step 1: Collect the Report Details
 

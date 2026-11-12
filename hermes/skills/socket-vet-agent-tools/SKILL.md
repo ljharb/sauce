@@ -149,7 +149,7 @@ Static review of the package as published finds things scores miss, such as tool
    - `<IMPORTANT>|ignore (all|previous)|do not tell|system prompt` - hidden instructions in tool text
    - `child_process|execSync|spawn|subprocess|os\.system` - shell execution
    - `fetch\(|https?://|XMLHttpRequest|requests\.` - network calls and hard-coded hosts
-   - `\.ssh|\.aws|\.npmrc|\.env|settings\.json|mcp\.json` - reads of credentials or agent config
+   - `\.ssh|\.aws|\.npmrc|settings\.json|mcp\.json|\.env\b` - reads of credentials or agent config
    - `bcc|webhook|eval\(|Buffer\.from\(.{0,40}base64` - exfiltration and obfuscation
 3. Call `package_file_contents` with a hash to read a whole file. It refuses binary files. For a file over 1 MB it returns only the first 1 MB and says so; `package_file_grep` also searches only the first 1 MB.
 
