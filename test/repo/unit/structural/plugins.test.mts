@@ -124,14 +124,10 @@ describe('every agent gets every skill', () => {
     }
   })
 
-  it('codex: every top-level skill root, which holds every nested skill', () => {
-    const roots = readJson('skills/.codex-plugin/plugin.json')[
-      'skills'
-    ] as string[]
-    for (const skill of skills) {
-      const top = skill.relDir.split('/')[0]
-      expect(roots, skill.name).toContain(`./${top}`)
-    }
+  it('codex: every skill directory', () => {
+    expect(
+      readJson('skills/.codex-plugin/plugin.json')['skills'],
+    ).toStrictEqual(names.map(name => `./${name}`))
   })
 
   it('cursor: the whole skills directory', () => {
@@ -142,7 +138,7 @@ describe('every agent gets every skill', () => {
     const manifest = readJson('gemini-extension.json')
     const context = read(manifest['contextFileName'])
     for (const skill of skills) {
-      expect(context, skill.name).toContain(`skills/${skill.relDir}/SKILL.md`)
+      expect(context, skill.name).toContain(`skills/${skill.name}/SKILL.md`)
     }
   })
 
@@ -152,7 +148,7 @@ describe('every agent gets every skill', () => {
     ).toStrictEqual(names)
     for (const skill of skills) {
       expect(read(`hermes/skills/${skill.name}/SKILL.md`)).toBe(
-        read(`skills/${skill.relDir}/SKILL.md`),
+        read(`skills/${skill.name}/SKILL.md`),
       )
     }
   })

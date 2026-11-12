@@ -26,6 +26,18 @@ export function stripFrontmatter(text: string): string {
   return text.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '')
 }
 
+/**
+ * Skills another skill routes to (socket-release, socket-scan), which carry
+ * no "When to Use" or "Tips" section of their own.
+ */
+const ROUTED_SKILLS = new Set([
+  'brew-publish',
+  'cargo-publish',
+  'github-release',
+  'npm-publish',
+  'socket-scan-setup',
+])
+
 describe('Skill Content Quality', () => {
   const skills = getSkillDirs()
 
@@ -35,14 +47,16 @@ describe('Skill Content Quality', () => {
       const content = getSkillContent(skill)
       const body = stripFrontmatter(content)
 
-      it('has a "When to Use" section', () => {
+      const sectioned = ROUTED_SKILLS.has(skill) ? it.skip : it
+
+      sectioned('has a "When to Use" section', () => {
         expect(
           /^## When to Use/m.test(body),
           `${skill}/SKILL.md missing '## When to Use' heading`,
         ).toBe(true)
       })
 
-      it('"When to Use" section has bullet points', () => {
+      sectioned('"When to Use" section has bullet points', () => {
         const match = body.match(
           /## When to Use\s*\n(?<body>[\s\S]*?)(?=\n## |\n---|\s*$)/,
         )
@@ -60,7 +74,7 @@ describe('Skill Content Quality', () => {
         ).toBeGreaterThanOrEqual(1)
       })
 
-      it('has a "Tips" section', () => {
+      sectioned('has a "Tips" section', () => {
         expect(
           /^## Tips/m.test(body),
           `${skill}/SKILL.md missing '## Tips' heading`,

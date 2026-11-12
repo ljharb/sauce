@@ -44,25 +44,25 @@ The skills are located in:
 
 <details><summary>Every bundled SKILL.md path</summary>
 
-- `skills/socket-release/brew-publish/SKILL.md`
+- `skills/brew-publish/SKILL.md`
 
-- `skills/socket-release/cargo-publish/SKILL.md`
+- `skills/cargo-publish/SKILL.md`
 
-- `skills/socket-release/github-release/SKILL.md`
+- `skills/github-release/SKILL.md`
 
 - `skills/knowledge-update/SKILL.md`
 
-- `skills/socket-release/npm-publish/SKILL.md`
+- `skills/npm-publish/SKILL.md`
 
 - `skills/socket-connect/SKILL.md`
 
-- `skills/socket-fix/socket-dep-cleanup/SKILL.md`
+- `skills/socket-dep-cleanup/SKILL.md`
 
-- `skills/socket-fix/socket-dep-patch/SKILL.md`
+- `skills/socket-dep-patch/SKILL.md`
 
-- `skills/socket-fix/socket-dep-replace/SKILL.md`
+- `skills/socket-dep-replace/SKILL.md`
 
-- `skills/socket-fix/socket-dep-upgrade/SKILL.md`
+- `skills/socket-dep-upgrade/SKILL.md`
 
 - `skills/socket-firewall/SKILL.md`
 
@@ -84,7 +84,7 @@ The skills are located in:
 
 - `skills/socket-scan/SKILL.md`
 
-- `skills/socket-scan/socket-scan-setup/SKILL.md`
+- `skills/socket-scan-setup/SKILL.md`
 
 - `skills/socket-setup/SKILL.md`
 

@@ -28,9 +28,7 @@ describe('Manifest Consistency', () => {
 
     it('links every skill, nested ones too', () => {
       for (const skill of skills) {
-        expect(agentsMd, skill.name).toContain(
-          `skills/${skill.relDir}/SKILL.md`,
-        )
+        expect(agentsMd, skill.name).toContain(`skills/${skill.name}/SKILL.md`)
       }
     })
 

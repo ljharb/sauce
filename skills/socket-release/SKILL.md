@@ -97,10 +97,10 @@ Playwright browser law (verbatim, non-negotiable):
 
 ## Operating the channels
 
-- **npm staged publishing**: see [npm-publish](npm-publish/SKILL.md)
-- **GitHub releases + ORDER RULE**: see [github-release](github-release/SKILL.md)
-- **crates.io staged model**: see [cargo-publish](cargo-publish/SKILL.md)
-- **Homebrew tap bumps**: see [brew-publish](brew-publish/SKILL.md)
+- **npm staged publishing**: see [npm-publish](../npm-publish/SKILL.md)
+- **GitHub releases + ORDER RULE**: see [github-release](../github-release/SKILL.md)
+- **crates.io staged model**: see [cargo-publish](../cargo-publish/SKILL.md)
+- **Homebrew tap bumps**: see [brew-publish](../brew-publish/SKILL.md)
 
 ## Tips
 

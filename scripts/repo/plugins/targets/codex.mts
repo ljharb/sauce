@@ -2,8 +2,8 @@
  * OpenAI Codex. The plugin root is skills/, not the repo root: Codex copies
  * the whole plugin root into its cache on install, and skills/ is the only
  * shipped content Codex needs. Codex ignores manifest paths that do not
- * start with './', and rejects a bare './' skills path, so the top-level
- * skill directories are listed; Codex finds nested skills by scanning them.
+ * start with './', and rejects a bare './' skills path, so every skill
+ * directory is listed.
  * The MCP config is never named .mcp.json, which is the fleet's MCP
  * inventory and gitignored at every depth.
  */
@@ -34,9 +34,7 @@ export const CODEX_MARKETPLACE = '.agents/plugins/marketplace.json'
 const CATEGORY = 'Developer Tools'
 
 export function codexSkillRoots(ctx: PluginInputs): string[] {
-  return ctx.skills
-    .filter(skill => skill.parent === undefined)
-    .map(skill => `./${skill.relDir}`)
+  return ctx.skills.map(skill => `./${skill.name}`)
 }
 
 export function buildCodexManifest(ctx: PluginInputs): Record<string, unknown> {
